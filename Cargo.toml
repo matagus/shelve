@@ -5,6 +5,7 @@ edition = "2021"
 description = "A simple command-line tool to pretty print CSV files grouped by a column"
 license = "MIT"
 repository = "https://github.com/matagus/shelve"
+readme = "README.md"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
