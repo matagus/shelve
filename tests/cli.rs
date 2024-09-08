@@ -25,7 +25,17 @@ fn run(args: &[&str], expected_file: &str) -> TestResult {
     Ok(())
 }
 
-// --------------------------------------------------
+//---------------------------------------------------
+#[test]
+fn test_help() -> TestResult {
+    run(&["--help"], "tests/expected/help.txt")
+}
+
+#[test]
+fn test_version() -> TestResult {
+    run(&["--version"], "tests/expected/version.txt")
+}
+
 #[test]
 fn test_default_column() -> TestResult {
     run(
@@ -34,7 +44,6 @@ fn test_default_column() -> TestResult {
     )
 }
 
-// --------------------------------------------------
 #[test]
 fn test_first_column() -> TestResult {
     run(
@@ -43,7 +52,6 @@ fn test_first_column() -> TestResult {
     )
 }
 
-// --------------------------------------------------
 #[test]
 fn test_2nd_column() -> TestResult {
     run(
@@ -52,7 +60,6 @@ fn test_2nd_column() -> TestResult {
     )
 }
 
-// --------------------------------------------------
 #[test]
 fn test_3rd_column() -> TestResult {
     run(
@@ -61,7 +68,6 @@ fn test_3rd_column() -> TestResult {
     )
 }
 
-// --------------------------------------------------
 #[test]
 fn test_4th_column() -> TestResult {
     run(

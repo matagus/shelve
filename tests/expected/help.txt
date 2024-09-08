@@ -1,0 +1,11 @@
+A simple command-line tool to pretty print CSV files grouped by a column
+
+Usage: shelve [OPTIONS] <FILENAME>
+
+Arguments:
+  <FILENAME>  
+
+Options:
+  -c, --column-number <COLUMN_NUMBER>  Column number to group by [default: 0]
+  -h, --help                           Print help
+  -V, --version                        Print version
