@@ -54,8 +54,11 @@ fn run(file_path: &str, column_index: usize) -> Result<(), Box<dyn Error>> {
             .push(record.iter().map(|s| s.to_string()).collect());
     }
 
-    // Print grouped rows
-    for (key, group) in groups {
+    // Sort groups by key
+    let mut sorted_groups: Vec<_> = groups.into_iter().collect();
+    sorted_groups.sort_by(|a, b| a.0.cmp(&b.0));
+
+    for (key, group) in sorted_groups {
         println!("{}:\n", key);
         for row in group {
             let row_to_display = match column_index {
