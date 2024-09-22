@@ -7,7 +7,7 @@ use std::process;
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    filename: String,
+    filenames: Vec<String>,
 
     /// Column number to group by
     #[arg(short, long, default_value = "0")]
@@ -19,39 +19,38 @@ fn main() {
 
     let column_index = cli.column_number.unwrap() as usize;
 
-    if let Err(err) = run(&cli.filename, column_index) {
+    if let Err(err) = run(&cli.filenames, column_index) {
         println!("Error: {}", err);
         process::exit(1);
     }
 }
 
-fn run(file_path: &str, column_index: usize) -> Result<(), Box<dyn Error>> {
-    // Open the CSV file
-    let file = File::open(file_path)?;
-
-    // Create a CSV reader
-    let mut rdr = csv::Reader::from_reader(file);
-
+fn run(filename_vec: &[String], column_index: usize) -> Result<(), Box<dyn Error>> {
     // Create a HashMap to store groups
     let mut groups: HashMap<String, Vec<Vec<String>>> = HashMap::new();
 
-    // Iterate over each record
-    for result in rdr.records() {
-        let record = result?;
+    for filename in filename_vec {
+        // Create a CSV reader
+        let mut rdr = csv::Reader::from_reader(File::open(filename)?);
 
-        // Check if the column index is within bounds
-        if column_index >= record.len() {
-            return Err(format!("Column index {} is out of bounds", column_index).into());
+        // Iterate over each record
+        for result in rdr.records() {
+            let record = result?;
+
+            // Check if the column index is within bounds
+            if column_index >= record.len() {
+                return Err(format!("Column index {} is out of bounds", column_index).into());
+            }
+
+            // Get the key for grouping
+            let key = record[column_index].to_string();
+
+            // Insert the record into the appropriate group
+            groups
+                .entry(key)
+                .or_insert_with(Vec::new)
+                .push(record.iter().map(|s| s.to_string()).collect());
         }
-
-        // Get the key for grouping
-        let key = record[column_index].to_string();
-
-        // Insert the record into the appropriate group
-        groups
-            .entry(key)
-            .or_insert_with(Vec::new)
-            .push(record.iter().map(|s| s.to_string()).collect());
     }
 
     // Sort groups by key
