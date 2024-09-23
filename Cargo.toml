@@ -1,6 +1,6 @@
 [package]
 name = "shelve"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "A simple command-line tool to pretty print CSV files grouped by a column"
 license = "MIT"
