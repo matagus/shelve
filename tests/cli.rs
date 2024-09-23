@@ -14,6 +14,18 @@ fn run(args: &[&str], expected_file: &str) -> TestResult {
     Ok(())
 }
 
+fn run_reading_from_stdin(stdin_file: &str, args: &[&str], expected_file: &str) -> TestResult {
+    let input = fs::read_to_string(stdin_file)?;
+    let expected = fs::read_to_string(expected_file)?;
+    Command::cargo_bin("shelve")?
+        .args(args)
+        .write_stdin(input)
+        .assert()
+        .success()
+        .stdout(expected);
+    Ok(())
+}
+
 //---------------------------------------------------
 #[test]
 fn test_help() -> TestResult {
@@ -75,5 +87,14 @@ fn test_tw0_files() -> TestResult {
             "tests/inputs/more-tasks.csv",
         ],
         "tests/expected/two-files.txt",
+    )
+}
+
+#[test]
+fn test_read_from_stdin() -> TestResult {
+    run_reading_from_stdin(
+        "tests/inputs/tasks.csv",
+        &["-c", "4"],
+        "tests/expected/stdin.txt",
     )
 }
