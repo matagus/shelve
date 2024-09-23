@@ -116,6 +116,36 @@ Alice Bar:
 7, Fix bug C, To Do, Alice Bar, High
 ```
 
+The command can also read input from `stdin`:
+
+```bash
+>> cat sample-files/tasks.csv | shelve -c 4
+
+High:
+
+1, Implement feature A, In Progress, John Doe, High
+4, Refactor code, To Do, Jane Doe, High
+7, Fix bug C, To Do, Alice Bar, High
+
+Low:
+
+2, Fix bug B, Done, Jane Doe, Low
+5, Deploy to production A and B, To Do, John Doe, Low
+8, Write tests for feature A, In Progress, John Doe, Low
+
+Medium:
+
+3, Write tests for feature A, In Progress, John Doe, Medium
+6, Write missing documentation for feature A, Done, Peter Foo, Medium
+```
+
+Or reading multiple files at once:
+
+```bash
+shelve -c 4 sample-files/tasks.csv sample-files/more-tasks.csv
+```
+
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
