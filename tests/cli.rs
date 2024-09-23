@@ -64,3 +64,16 @@ fn test_4th_column() -> TestResult {
         "tests/expected/column-4.txt",
     )
 }
+
+#[test]
+fn test_tw0_files() -> TestResult {
+    run(
+        &[
+            "-c",
+            "4",
+            "tests/inputs/tasks.csv",
+            "tests/inputs/more-tasks.csv",
+        ],
+        "tests/expected/two-files.txt",
+    )
+}
