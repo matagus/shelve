@@ -29,27 +29,15 @@ fn run(filename_vec: &[String], column_index: usize) -> Result<(), Box<dyn Error
     // Create a HashMap to store groups
     let mut groups: HashMap<String, Vec<Vec<String>>> = HashMap::new();
 
-    for filename in filename_vec {
-        // Create a CSV reader
-        let mut rdr = csv::Reader::from_reader(File::open(filename)?);
-
-        // Iterate over each record
-        for result in rdr.records() {
-            let record = result?;
-
-            // Check if the column index is within bounds
-            if column_index >= record.len() {
-                return Err(format!("Column index {} is out of bounds", column_index).into());
-            }
-
-            // Get the key for grouping
-            let key = record[column_index].to_string();
-
-            // Insert the record into the appropriate group
-            groups
-                .entry(key)
-                .or_insert_with(Vec::new)
-                .push(record.iter().map(|s| s.to_string()).collect());
+    if filename_vec.is_empty() {
+        let stdin = std::io::stdin().lock();
+        let mut rdr = csv::Reader::from_reader(stdin);
+        process_reader(&mut rdr, &mut groups, column_index)?;
+    } else {
+        for filename in filename_vec {
+            // Create a CSV reader
+            let mut rdr = csv::Reader::from_reader(File::open(filename)?);
+            process_reader(&mut rdr, &mut groups, column_index)?;
         }
     }
 
@@ -69,5 +57,25 @@ fn run(filename_vec: &[String], column_index: usize) -> Result<(), Box<dyn Error
         println!();
     }
 
+    Ok(())
+}
+
+fn process_reader<R: std::io::Read>(
+    rdr: &mut csv::Reader<R>,
+    groups: &mut HashMap<String, Vec<Vec<String>>>,
+    column_index: usize,
+) -> Result<(), Box<dyn Error>> {
+    for result in rdr.records() {
+        let record = result?;
+
+        // Check if the column index is within bounds
+        if column_index >= record.len() {
+            return Err(format!("Column index {} is out of bounds", column_index).into());
+        }
+
+        let key = record[column_index].to_string();
+        let group = groups.entry(key).or_insert_with(Vec::new);
+        group.push(record.iter().map(|s| s.to_string()).collect());
+    }
     Ok(())
 }
