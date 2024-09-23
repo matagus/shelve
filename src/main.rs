@@ -2,6 +2,7 @@ use clap::Parser;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
+use std::io::{self, Write};
 use std::process;
 
 #[derive(Parser)]
@@ -41,20 +42,25 @@ fn run(filename_vec: &[String], column_index: usize) -> Result<(), Box<dyn Error
         }
     }
 
+    // Use a BufWriter to improve performance by reducing the number of write calls
+    let stdout = io::stdout();
+    let mut stream = io::BufWriter::new(stdout);
+
     // Sort groups by key
     let mut sorted_groups: Vec<_> = groups.into_iter().collect();
     sorted_groups.sort_by(|a, b| a.0.cmp(&b.0));
 
     for (key, group) in sorted_groups {
-        println!("{}:\n", key);
+        writeln!(stream, "{}:\n", key)?;
+
         for row in group {
             let row_to_display = match column_index {
                 0 => row[1..].join(", "),
                 _ => row[..column_index].join(", ") + ", " + &row[column_index..].join(", "),
             };
-            println!("{}", row_to_display);
+            writeln!(stream, "{}", row_to_display)?;
         }
-        println!();
+        writeln!(stream)?;
     }
 
     Ok(())
