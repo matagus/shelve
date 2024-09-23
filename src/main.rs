@@ -1,5 +1,6 @@
 use clap::Parser;
-use std::collections::HashMap;
+use std::collections::btree_map::Entry;
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs::File;
 use std::io::{self, Write};
@@ -18,27 +19,75 @@ struct Cli {
 fn main() {
     let cli = Cli::parse();
 
-    let column_index = cli.column_number.unwrap() as usize;
+    let index = cli.column_number.unwrap() as usize;
 
-    if let Err(err) = run(&cli.filenames, column_index) {
-        println!("Error: {}", err);
+    if let Err(err) = run(&cli.filenames, index) {
+        eprintln!("Error: {}", err);
         process::exit(1);
     }
 }
 
-fn run(filename_vec: &[String], column_index: usize) -> Result<(), Box<dyn Error>> {
-    // Create a HashMap to store groups
-    let mut groups: HashMap<String, Vec<Vec<String>>> = HashMap::new();
+#[derive(Debug)]
+struct Row {
+    data: Vec<String>,
+}
+
+#[derive(Debug)]
+struct GroupedData {
+    groups: BTreeMap<String, Vec<Row>>,
+}
+
+impl Row {
+    fn new(data: Vec<String>) -> Self {
+        Row { data }
+    }
+
+    fn join_without_col(&self, separator: &str, index: usize) -> String {
+        let mut data = self.data.clone();
+        data.remove(index);
+        data.join(separator)
+    }
+}
+
+impl GroupedData {
+    fn new() -> Self {
+        GroupedData {
+            groups: BTreeMap::new(),
+        }
+    }
+
+    fn add(&mut self, group_name: &str, row: Row) {
+        match self.groups.entry(group_name.to_string()) {
+            Entry::Occupied(mut entry) => {
+                entry.get_mut().push(row);
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(vec![row]);
+            }
+        }
+    }
+
+    fn get_groups(&self) -> Vec<&String> {
+        self.groups.keys().collect()
+    }
+
+    fn get_rows(&self, group_name: &str) -> Option<&Vec<Row>> {
+        self.groups.get(group_name)
+    }
+}
+
+fn run(filename_vec: &[String], index: usize) -> Result<(), Box<dyn Error>> {
+    let mut groups: GroupedData = GroupedData::new();
 
     if filename_vec.is_empty() {
         let stdin = std::io::stdin().lock();
         let mut rdr = csv::Reader::from_reader(stdin);
-        process_reader(&mut rdr, &mut groups, column_index)?;
+        process_reader(&mut rdr, &mut groups, index)?;
     } else {
         for filename in filename_vec {
             // Create a CSV reader
             let mut rdr = csv::Reader::from_reader(File::open(filename)?);
-            process_reader(&mut rdr, &mut groups, column_index)?;
+            process_reader(&mut rdr, &mut groups, index)?;
         }
     }
 
@@ -46,19 +95,14 @@ fn run(filename_vec: &[String], column_index: usize) -> Result<(), Box<dyn Error
     let stdout = io::stdout();
     let mut stream = io::BufWriter::new(stdout);
 
-    // Sort groups by key
-    let mut sorted_groups: Vec<_> = groups.into_iter().collect();
-    sorted_groups.sort_by(|a, b| a.0.cmp(&b.0));
+    for group in &groups.get_groups() {
+        writeln!(stream, "{}:\n", group)?;
 
-    for (key, group) in sorted_groups {
-        writeln!(stream, "{}:\n", key)?;
-
-        for row in group {
-            let row_to_display = match column_index {
-                0 => row[1..].join(", "),
-                _ => row[..column_index].join(", ") + ", " + &row[column_index..].join(", "),
-            };
-            writeln!(stream, "{}", row_to_display)?;
+        if let Some(rows) = groups.get_rows(group) {
+            for row in rows {
+                let display_row = row.join_without_col(", ", index);
+                writeln!(stream, "{}", display_row)?;
+            }
         }
         writeln!(stream)?;
     }
@@ -68,20 +112,20 @@ fn run(filename_vec: &[String], column_index: usize) -> Result<(), Box<dyn Error
 
 fn process_reader<R: std::io::Read>(
     rdr: &mut csv::Reader<R>,
-    groups: &mut HashMap<String, Vec<Vec<String>>>,
-    column_index: usize,
+    groups: &mut GroupedData,
+    index: usize,
 ) -> Result<(), Box<dyn Error>> {
     for result in rdr.records() {
         let record = result?;
 
         // Check if the column index is within bounds
-        if column_index >= record.len() {
-            return Err(format!("Column index {} is out of bounds", column_index).into());
+        if index >= record.len() {
+            return Err(format!("Column index {} is out of bounds", index).into());
         }
 
-        let key = record[column_index].to_string();
-        let group = groups.entry(key).or_insert_with(Vec::new);
-        group.push(record.iter().map(|s| s.to_string()).collect());
+        let key = record[index].to_string();
+        let row = Row::new(record.iter().map(|s| s.to_string()).collect());
+        groups.add(&key, row);
     }
     Ok(())
 }
