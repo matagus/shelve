@@ -52,20 +52,20 @@ shelve -c 2 example.csv
 
 Done:
 
-2, Fix bug B, Done, Jane Doe, Low
-6, Write missing documentation for feature A, Done, Peter Foo, Medium
+2, Fix bug B, Jane Doe, Low
+6, Write missing documentation for feature A, Peter Foo, Medium
 
 In Progress:
 
-1, Implement feature A, In Progress, John Doe, High
-3, Write tests for feature A, In Progress, John Doe, Medium
-8, Write tests for feature A, In Progress, John Doe, Low
+1, Implement feature A, John Doe, High
+3, Write tests for feature A, John Doe, Medium
+8, Write tests for feature A, John Doe, Low
 
 To Do:
 
-4, Refactor code, To Do, Jane Doe, High
-5, Deploy to production A and B, To Do, John Doe, Low
-7, Fix bug C, To Do, Alice Bar, High
+4, Refactor code, Jane Doe, High
+5, Deploy to production A and B, John Doe, Low
+7, Fix bug C, Alice Bar, High
 ```
 
 Grouping by the `Priority` column (column number 4):
@@ -75,20 +75,20 @@ shelve -c 4 example.csv
 
 High:
 
-1, Implement feature A, In Progress, John Doe, High
-4, Refactor code, To Do, Jane Doe, High
-7, Fix bug C, To Do, Alice Bar, High
+1, Implement feature A, In Progress, John Doe
+4, Refactor code, To Do, Jane Doe
+7, Fix bug C, To Do, Alice Bar
 
 Low:
 
-2, Fix bug B, Done, Jane Doe, Low
-5, Deploy to production A and B, To Do, John Doe, Low
-8, Write tests for feature A, In Progress, John Doe, Low
+2, Fix bug B, Done, Jane Doe
+5, Deploy to production A and B, To Do, John Doe
+8, Write tests for feature A, In Progress, John Doe
 
 Medium:
 
-3, Write tests for feature A, In Progress, John Doe, Medium
-6, Write missing documentation for feature A, Done, Peter Foo, Medium
+3, Write tests for feature A, In Progress, John Doe
+6, Write missing documentation for feature A, Done, Peter Foo
 ```
 
 Grouping by the `Assignee` column (column number 3):
@@ -98,23 +98,23 @@ shelve -c 3 example.csv
 
 Alice Bar:
 
-7, Fix bug C, To Do, Alice Bar, High
+7, Fix bug C, To Do, High
 
 Jane Doe:
 
-2, Fix bug B, Done, Jane Doe, Low
-4, Refactor code, To Do, Jane Doe, High
+2, Fix bug B, Done, Low
+4, Refactor code, To Do, High
 
 John Doe:
 
-1, Implement feature A, In Progress, John Doe, High
-3, Write tests for feature A, In Progress, John Doe, Medium
-5, Deploy to production A and B, To Do, John Doe, Low
-8, Write tests for feature A, In Progress, John Doe, Low
+1, Implement feature A, In Progress, High
+3, Write tests for feature A, In Progress, Medium
+5, Deploy to production A and B, To Do, Low
+8, Write tests for feature A, In Progress, Low
 
 Peter Foo:
 
-6, Write missing documentation for feature A, Done, Peter Foo, Medium
+6, Write missing documentation for feature A, Done, Medium
 ```
 
 The command can also read input from `stdin`:
@@ -124,20 +124,20 @@ The command can also read input from `stdin`:
 
 High:
 
-1, Implement feature A, In Progress, John Doe, High
-4, Refactor code, To Do, Jane Doe, High
-7, Fix bug C, To Do, Alice Bar, High
+1, Implement feature A, In Progress, John Doe
+4, Refactor code, To Do, Jane Doe
+7, Fix bug C, To Do, Alice Bar
 
 Low:
 
-2, Fix bug B, Done, Jane Doe, Low
-5, Deploy to production A and B, To Do, John Doe, Low
-8, Write tests for feature A, In Progress, John Doe, Low
+2, Fix bug B, Done, Jane Doe
+5, Deploy to production A and B, To Do, John Doe
+8, Write tests for feature A, In Progress, John Doe
 
 Medium:
 
-3, Write tests for feature A, In Progress, John Doe, Medium
-6, Write missing documentation for feature A, Done, Peter Foo, Medium
+3, Write tests for feature A, In Progress, John Doe
+6, Write missing documentation for feature A, Done, Peter Foo
 ```
 
 Or reading multiple files at once:
