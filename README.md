@@ -17,10 +17,10 @@ cargo install shelve
 ```bash
 shelve --help
 
-Usage: shelve [OPTIONS] <FILENAME>
+Usage: shelve [OPTIONS] [FILENAME]...
 
 Arguments:
-  <FILENAME>
+  FILENAME  CSV file to read [default: stdin]
 
 Options:
   -c, --column-number <COLUMN_NUMBER>  Column number to group by [default: 0]
@@ -55,16 +55,17 @@ Done:
 2, Fix bug B, Done, Jane Doe, Low
 6, Write missing documentation for feature A, Done, Peter Foo, Medium
 
+In Progress:
+
+1, Implement feature A, In Progress, John Doe, High
+3, Write tests for feature A, In Progress, John Doe, Medium
+8, Write tests for feature A, In Progress, John Doe, Low
+
 To Do:
 
 4, Refactor code, To Do, Jane Doe, High
 5, Deploy to production A and B, To Do, John Doe, Low
 7, Fix bug C, To Do, Alice Bar, High
-
-In Progress:
-
-3, Write tests for feature A, In Progress, John Doe, Medium
-8, Write tests for feature A, In Progress, John Doe, Low
 ```
 
 Grouping by the `Priority` column (column number 4):
@@ -78,22 +79,26 @@ High:
 4, Refactor code, To Do, Jane Doe, High
 7, Fix bug C, To Do, Alice Bar, High
 
-Medium:
-
-3, Write tests for feature A, In Progress, John Doe, Medium
-6, Write missing documentation for feature A, Done, Peter Foo, Medium
-
 Low:
 
 2, Fix bug B, Done, Jane Doe, Low
 5, Deploy to production A and B, To Do, John Doe, Low
 8, Write tests for feature A, In Progress, John Doe, Low
+
+Medium:
+
+3, Write tests for feature A, In Progress, John Doe, Medium
+6, Write missing documentation for feature A, Done, Peter Foo, Medium
 ```
 
 Grouping by the `Assignee` column (column number 3):
 
 ```bash
 shelve -c 3 example.csv
+
+Alice Bar:
+
+7, Fix bug C, To Do, Alice Bar, High
 
 Jane Doe:
 
@@ -110,10 +115,6 @@ John Doe:
 Peter Foo:
 
 6, Write missing documentation for feature A, Done, Peter Foo, Medium
-
-Alice Bar:
-
-7, Fix bug C, To Do, Alice Bar, High
 ```
 
 The command can also read input from `stdin`:
