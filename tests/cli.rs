@@ -67,3 +67,10 @@ fn test_tw0_files() -> TestResult {
 fn test_read_from_stdin() -> TestResult {
     run_reading_from_stdin("tests/inputs/tasks.csv", &["-c", "4"], "tests/expected/stdin.txt")
 }
+
+#[test]
+fn test_unexpected_argument() -> TestResult {
+    let expected = fs::read_to_string("tests/expected/unexpected-argument.txt")?;
+    Command::cargo_bin("shelve")?.args(&["--foobar", "tests/inputs/tasks.csv"]).assert().failure().stderr(expected);
+    Ok(())
+}
