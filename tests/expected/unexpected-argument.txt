@@ -1,0 +1,7 @@
+error: unexpected argument '--foobar' found
+
+  tip: to pass '--foobar' as a value, use '-- --foobar'
+
+Usage: shelve [OPTIONS] [FILENAMES]...
+
+For more information, try '--help'.
