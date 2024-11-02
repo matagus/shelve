@@ -31,6 +31,16 @@ fn test_version() -> TestResult {
 }
 
 #[test]
+fn test_zero_column() -> TestResult {
+    Command::cargo_bin("shelve")?
+        .args(&["-c", "0", "tests/inputs/tasks.csv"])
+        .assert()
+        .failure()
+        .stderr("Column number must be greater than 0\n");
+    Ok(())
+}
+
+#[test]
 fn test_default_column() -> TestResult {
     run(&["tests/inputs/tasks.csv"], "tests/expected/default-column.txt")
 }
@@ -56,16 +66,21 @@ fn test_4th_column() -> TestResult {
 }
 
 #[test]
+fn test_5th_column() -> TestResult {
+    run(&["-c", "5", "tests/inputs/tasks.csv"], "tests/expected/column-5.txt")
+}
+
+#[test]
 fn test_tw0_files() -> TestResult {
     run(
-        &["-c", "4", "tests/inputs/tasks.csv", "tests/inputs/more-tasks.csv"],
+        &["-c", "5", "tests/inputs/tasks.csv", "tests/inputs/more-tasks.csv"],
         "tests/expected/two-files.txt",
     )
 }
 
 #[test]
 fn test_read_from_stdin() -> TestResult {
-    run_reading_from_stdin("tests/inputs/tasks.csv", &["-c", "4"], "tests/expected/stdin.txt")
+    run_reading_from_stdin("tests/inputs/tasks.csv", &["-c", "5"], "tests/expected/stdin.txt")
 }
 
 #[test]

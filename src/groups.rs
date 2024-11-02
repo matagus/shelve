@@ -12,7 +12,7 @@ pub struct Row {
 impl std::fmt::Display for Row {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let mut cloned_data = self.data.clone();
-        cloned_data.remove(self.index);
+        cloned_data.remove(self.index - 1);
         write!(f, "{}", cloned_data.join(", "))
     }
 }
@@ -40,7 +40,7 @@ impl GroupedData {
     fn process<R: std::io::Read>(&mut self, rdr: &mut csv::Reader<R>) -> Result<(), Box<dyn Error>> {
         for result in rdr.records() {
             let record = result?;
-            let key = record[self.index].to_string();
+            let key = record[self.index - 1].to_string();
             let row = Row::new(record.iter().map(|s| s.to_string()).collect(), self.index);
             self.add(&key, row);
         }

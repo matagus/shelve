@@ -6,6 +6,6 @@ Arguments:
   [FILENAMES]...  
 
 Options:
-  -c, --column-number <COLUMN_NUMBER>  Column number to group by [default: 0]
+  -c, --column-number <COLUMN_NUMBER>  Column number to group by [default: 1]
   -h, --help                           Print help
   -V, --version                        Print version

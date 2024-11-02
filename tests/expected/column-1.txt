@@ -1,29 +1,32 @@
-Deploy to production A and B:
+1:
 
-5, To Do, John Doe, Low
+Implement feature A, In Progress, John Doe, High
 
-Fix bug B:
+2:
 
-2, Done, Jane Doe, Low
+Fix bug B, Done, Jane Doe, Low
 
-Fix bug C:
+3:
 
-7, To Do, Alice Bar, High
+Write tests for feature A, In Progress, John Doe, Medium
 
-Implement feature A:
+4:
 
-1, In Progress, John Doe, High
+Refactor code, To Do, Jane Doe, High
 
-Refactor code:
+5:
 
-4, To Do, Jane Doe, High
+Deploy to production A and B, To Do, John Doe, Low
 
-Write missing documentation for feature A:
+6:
 
-6, Done, Peter Foo, Medium
+Write missing documentation for feature A, Done, Peter Foo, Medium
 
-Write tests for feature A:
+7:
 
-3, In Progress, John Doe, Medium
-8, In Progress, John Doe, Low
+Fix bug C, To Do, Alice Bar, High
+
+8:
+
+Write tests for feature A, In Progress, John Doe, Low
 

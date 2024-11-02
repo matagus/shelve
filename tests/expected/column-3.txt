@@ -1,20 +1,17 @@
-Alice Bar:
+Done:
 
-7, Fix bug C, To Do, High
+2, Fix bug B, Jane Doe, Low
+6, Write missing documentation for feature A, Peter Foo, Medium
 
-Jane Doe:
+In Progress:
 
-2, Fix bug B, Done, Low
-4, Refactor code, To Do, High
+1, Implement feature A, John Doe, High
+3, Write tests for feature A, John Doe, Medium
+8, Write tests for feature A, John Doe, Low
 
-John Doe:
+To Do:
 
-1, Implement feature A, In Progress, High
-3, Write tests for feature A, In Progress, Medium
-5, Deploy to production A and B, To Do, Low
-8, Write tests for feature A, In Progress, Low
-
-Peter Foo:
-
-6, Write missing documentation for feature A, Done, Medium
+4, Refactor code, Jane Doe, High
+5, Deploy to production A and B, John Doe, Low
+7, Fix bug C, Alice Bar, High
 
