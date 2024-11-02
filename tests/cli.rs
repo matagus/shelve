@@ -36,7 +36,7 @@ fn test_zero_column() -> TestResult {
         .args(&["-c", "0", "tests/inputs/tasks.csv"])
         .assert()
         .failure()
-        .stderr("Column number must be greater than 0\n");
+        .stderr("Error: Column number must be greater than 0\n");
     Ok(())
 }
 
