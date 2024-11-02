@@ -23,7 +23,7 @@ Arguments:
   FILENAME  CSV file to read [default: stdin]
 
 Options:
-  -c, --column-number <COLUMN_NUMBER>  Column number to group by [default: 0]
+  -c, --column-number <COLUMN_NUMBER>  Column number to group by [default: 1]  (first colum)
   -h, --help                           Print help
   -V, --version                        Print version
 ```
@@ -48,7 +48,7 @@ Task ID,Task Title,Status,Assignee,Priority
 Grouping by the `Status` column (column number 2):
 
 ```bash
-shelve -c 2 example.csv
+shelve -c 3 example.csv
 
 Done:
 
@@ -71,7 +71,7 @@ To Do:
 Grouping by the `Priority` column (column number 4):
 
 ```bash
-shelve -c 4 example.csv
+shelve -c 5 example.csv
 
 High:
 
@@ -94,7 +94,7 @@ Medium:
 Grouping by the `Assignee` column (column number 3):
 
 ```bash
-shelve -c 3 example.csv
+shelve -c 4 example.csv
 
 Alice Bar:
 
@@ -120,7 +120,7 @@ Peter Foo:
 The command can also read input from `stdin`:
 
 ```bash
->> cat sample-files/tasks.csv | shelve -c 4
+>> cat sample-files/tasks.csv | shelve -c 5
 
 High:
 
@@ -143,7 +143,7 @@ Medium:
 Or reading multiple files at once:
 
 ```bash
-shelve -c 4 sample-files/tasks.csv sample-files/more-tasks.csv
+shelve -c 5 sample-files/tasks.csv sample-files/more-tasks.csv
 ```
 
 

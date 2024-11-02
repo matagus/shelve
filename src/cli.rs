@@ -6,6 +6,6 @@ pub struct Cli {
     pub filenames: Vec<String>,
 
     /// Column number to group by
-    #[arg(short, long, default_value = "0")]
+    #[arg(short, long, default_value = "1")]
     pub column_number: Option<u8>,
 }

@@ -13,6 +13,11 @@ fn main() {
 
     let index = cli.column_number.unwrap() as usize;
 
+    if index == 0 {
+        eprintln!("Column number must be greater than 0");
+        process::exit(1);
+    }
+
     if let Err(err) = run(&cli.filenames, index) {
         eprintln!("Error: {}", err);
         process::exit(1);
