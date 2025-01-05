@@ -39,10 +39,15 @@ impl GroupedData {
 
     fn process<R: std::io::Read>(&mut self, rdr: &mut csv::Reader<R>) -> Result<(), Box<dyn Error>> {
         for result in rdr.records() {
-            let record = result?;
-            let key = record[self.index - 1].to_string();
-            let row = Row::new(record.iter().map(|s| s.to_string()).collect(), self.index);
-            self.add(&key, row);
+            match result {
+                Err(e) => return Err(Box::new(e)),
+                Ok(record) => {
+                    if let Some(key) = record.get(self.index - 1) {
+                        let row = Row::new(record.iter().map(|s| s.to_string()).collect(), self.index);
+                        self.add(&key, row);
+                    }
+                }
+            }
         }
         Ok(())
     }
