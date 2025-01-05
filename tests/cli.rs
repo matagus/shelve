@@ -89,3 +89,9 @@ fn test_unexpected_argument() -> TestResult {
     Command::cargo_bin("shelve")?.args(&["--foobar", "tests/inputs/tasks.csv"]).assert().failure().stderr(expected);
     Ok(())
 }
+
+// test a case where -c option is higher than the number of columns
+#[test]
+fn test_too_high_column() -> TestResult {
+    run_reading_from_stdin("tests/inputs/tasks.csv", &["-c", "20"], "tests/expected/empty.txt")
+}
