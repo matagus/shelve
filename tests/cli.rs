@@ -90,6 +90,26 @@ fn test_unexpected_argument() -> TestResult {
     Ok(())
 }
 
+// With no filename argument the input must come from stdin; an empty stream is
+// a valid empty list, not an error about a missing argument.
+#[test]
+fn test_no_filename_arg_reads_stdin() -> TestResult {
+    run_reading_from_stdin("tests/inputs/empty.csv", &[], "tests/expected/empty.txt")
+}
+
+// A column number that is not a number is rejected by the parser, so it never
+// reaches the grouping logic.
+#[test]
+fn test_non_integer_column_index() -> TestResult {
+    Command::cargo_bin("shelve")?
+        .args(["-c", "abc", "tests/inputs/tasks.csv"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicates::str::contains("invalid digit found in string"));
+    Ok(())
+}
+
 // test a case where -c option is higher than the number of columns
 #[test]
 fn test_too_high_column() -> TestResult {
