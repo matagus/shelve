@@ -61,8 +61,10 @@ impl GroupedData {
             groups.process(&mut rdr)?;
         } else {
             for filename in filename_vec {
-                // Create a CSV reader
-                let mut rdr = csv::Reader::from_reader(File::open(filename)?);
+                // Name the file: with several arguments a bare "No such file or
+                // directory" leaves no way to tell which one failed.
+                let file = File::open(filename).map_err(|err| format!("cannot open '{filename}': {err}"))?;
+                let mut rdr = csv::Reader::from_reader(file);
                 groups.process(&mut rdr)?;
             }
         }

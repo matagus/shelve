@@ -33,7 +33,7 @@ fn test_version() -> TestResult {
 #[test]
 fn test_zero_column() -> TestResult {
     Command::cargo_bin("shelve")?
-        .args(&["-c", "0", "tests/inputs/tasks.csv"])
+        .args(["-c", "0", "tests/inputs/tasks.csv"])
         .assert()
         .failure()
         .stderr("Error: Column number must be greater than 0\n");
@@ -86,7 +86,7 @@ fn test_read_from_stdin() -> TestResult {
 #[test]
 fn test_unexpected_argument() -> TestResult {
     let expected = fs::read_to_string("tests/expected/unexpected-argument.txt")?;
-    Command::cargo_bin("shelve")?.args(&["--foobar", "tests/inputs/tasks.csv"]).assert().failure().stderr(expected);
+    Command::cargo_bin("shelve")?.args(["--foobar", "tests/inputs/tasks.csv"]).assert().failure().stderr(expected);
     Ok(())
 }
 
@@ -94,4 +94,16 @@ fn test_unexpected_argument() -> TestResult {
 #[test]
 fn test_too_high_column() -> TestResult {
     run_reading_from_stdin("tests/inputs/tasks.csv", &["-c", "20"], "tests/expected/empty.txt")
+}
+
+// A failing path has to be named, otherwise a multi-file invocation gives no
+// clue which argument could not be opened.
+#[test]
+fn test_missing_file_is_named_in_error() -> TestResult {
+    Command::cargo_bin("shelve")?
+        .arg("tests/inputs/no-such-file.csv")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("tests/inputs/no-such-file.csv"));
+    Ok(())
 }
