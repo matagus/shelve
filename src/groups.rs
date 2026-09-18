@@ -21,6 +21,7 @@ impl std::fmt::Display for Row {
 pub struct GroupedData {
     groups: BTreeMap<String, Vec<Row>>,
     index: usize,
+    warned_missing_column: bool,
 }
 
 impl Row {
@@ -34,22 +35,42 @@ impl GroupedData {
         GroupedData {
             groups: BTreeMap::new(),
             index,
+            warned_missing_column: false,
         }
     }
 
     fn process<R: std::io::Read>(&mut self, rdr: &mut csv::Reader<R>) -> Result<(), Box<dyn Error>> {
         for result in rdr.records() {
-            match result {
-                Err(e) => return Err(Box::new(e)),
-                Ok(record) => {
-                    if let Some(key) = record.get(self.index - 1) {
-                        let row = Row::new(record.iter().map(|s| s.to_string()).collect(), self.index);
-                        self.add(&key, row);
-                    }
+            let record = result?;
+
+            match record.get(self.index - 1) {
+                Some(key) => {
+                    let row = Row::new(record.iter().map(ToString::to_string).collect(), self.index);
+                    self.add(key, row);
                 }
+                None => self.warn_missing_column(),
             }
         }
+
         Ok(())
+    }
+
+    /// Report the first record that lacks the grouping column. Only the first
+    /// occurrence is printed, so a wide input cannot emit one line per row.
+    ///
+    /// Skipping is still the right outcome, but it has to be announced:
+    /// otherwise empty stdout with exit code 0 is indistinguishable from an
+    /// empty input file.
+    fn warn_missing_column(&mut self) {
+        if self.warned_missing_column {
+            return;
+        }
+        self.warned_missing_column = true;
+
+        eprintln!(
+            "Warning: column {} is missing from at least one record; those rows were skipped",
+            self.index
+        );
     }
 
     pub fn from_files(filename_vec: &[String], index: usize) -> Result<Self, Box<dyn Error>> {
@@ -61,8 +82,10 @@ impl GroupedData {
             groups.process(&mut rdr)?;
         } else {
             for filename in filename_vec {
-                // Create a CSV reader
-                let mut rdr = csv::Reader::from_reader(File::open(filename)?);
+                // Name the file: with several arguments a bare "No such file or
+                // directory" leaves no way to tell which one failed.
+                let file = File::open(filename).map_err(|err| format!("cannot open '{filename}': {err}"))?;
+                let mut rdr = csv::Reader::from_reader(file);
                 groups.process(&mut rdr)?;
             }
         }
