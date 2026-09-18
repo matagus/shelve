@@ -13,7 +13,7 @@ fn main() -> ExitCode {
 
     match cli.run() {
         Ok(()) => ExitCode::SUCCESS,
-        Err(err) => report(err),
+        Err(err) => report(&err),
     }
 }
 
@@ -21,12 +21,12 @@ fn main() -> ExitCode {
 ///
 /// `main` returns `ExitCode` instead of calling `process::exit`, so the runtime
 /// still runs destructors and flushes stdio on the way out.
-fn report(err: anyhow::Error) -> ExitCode {
+fn report(err: &anyhow::Error) -> ExitCode {
     // A downstream reader closing early (`shelve file.csv | head`) is normal
     // behaviour, not a failure. Rust installs SIG_IGN for SIGPIPE, so the write
     // surfaces as EPIPE instead of killing the process; treat it as a clean exit
     // rather than reporting an error nobody is left to read.
-    if is_broken_pipe(&err) {
+    if is_broken_pipe(err) {
         return ExitCode::SUCCESS;
     }
 
