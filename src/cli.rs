@@ -28,13 +28,11 @@ impl Cli {
         let stdout = io::stdout();
         let mut stream = io::BufWriter::new(stdout);
 
-        for group in &groups.get_groups() {
+        for (group, rows) in groups.groups() {
             writeln!(stream, "{group}:\n")?;
 
-            if let Some(rows) = groups.get_rows(group) {
-                for row in rows {
-                    writeln!(stream, "{row}")?;
-                }
+            for row in rows {
+                writeln!(stream, "{row}")?;
             }
             writeln!(stream)?;
         }
