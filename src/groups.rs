@@ -1,7 +1,8 @@
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
-use std::error::Error;
 use std::fs::File;
+
+use anyhow::{Context, Result};
 
 #[derive(Debug)]
 pub struct Row {
@@ -39,7 +40,7 @@ impl GroupedData {
         }
     }
 
-    fn process<R: std::io::Read>(&mut self, rdr: &mut csv::Reader<R>) -> Result<(), Box<dyn Error>> {
+    fn process<R: std::io::Read>(&mut self, rdr: &mut csv::Reader<R>) -> Result<()> {
         for result in rdr.records() {
             let record = result?;
 
@@ -73,7 +74,7 @@ impl GroupedData {
         );
     }
 
-    pub fn from_files(filename_vec: &[String], index: usize) -> Result<Self, Box<dyn Error>> {
+    pub fn from_files(filename_vec: &[String], index: usize) -> Result<Self> {
         let mut groups = GroupedData::new(index);
 
         if filename_vec.is_empty() {
@@ -83,10 +84,12 @@ impl GroupedData {
         } else {
             for filename in filename_vec {
                 // Name the file: with several arguments a bare "No such file or
-                // directory" leaves no way to tell which one failed.
-                let file = File::open(filename).map_err(|err| format!("cannot open '{filename}': {err}"))?;
+                // directory" leaves no way to tell which one failed. The same
+                // context covers parse errors, which are otherwise reported
+                // without saying which input they came from.
+                let file = File::open(filename).with_context(|| format!("cannot open '{filename}'"))?;
                 let mut rdr = csv::Reader::from_reader(file);
-                groups.process(&mut rdr)?;
+                groups.process(&mut rdr).with_context(|| format!("cannot read '{filename}'"))?;
             }
         }
 

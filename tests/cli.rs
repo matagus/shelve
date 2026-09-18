@@ -131,3 +131,31 @@ fn test_missing_file_is_named_in_error() -> TestResult {
         .stderr(predicates::str::contains("tests/inputs/no-such-file.csv"));
     Ok(())
 }
+
+// The report keeps its whole source chain: the context says which file failed
+// and the cause says why. Printing only the outermost error would drop one of
+// the two halves.
+#[test]
+fn test_missing_file_error_includes_cause() -> TestResult {
+    Command::cargo_bin("shelve")?
+        .arg("tests/inputs/no-such-file.csv")
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicates::str::contains("cannot open"))
+        .stderr(predicates::str::contains("No such file or directory"));
+    Ok(())
+}
+
+// A parse failure gets the same treatment: without context it is impossible to
+// tell which of several inputs was malformed.
+#[test]
+fn test_malformed_file_is_named_in_error() -> TestResult {
+    Command::cargo_bin("shelve")?
+        .arg("tests/inputs/malformed.csv")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("cannot read 'tests/inputs/malformed.csv'"))
+        .stderr(predicates::str::contains("CSV error"));
+    Ok(())
+}
