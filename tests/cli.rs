@@ -96,6 +96,30 @@ fn test_too_high_column() -> TestResult {
     run_reading_from_stdin("tests/inputs/tasks.csv", &["-c", "20"], "tests/expected/empty.txt")
 }
 
+// ...but it must not stay silent about it. Empty stdout plus a zero exit code
+// is otherwise indistinguishable from an empty input file.
+#[test]
+fn test_too_high_column_warns_on_stderr() -> TestResult {
+    let input = fs::read_to_string("tests/inputs/tasks.csv")?;
+    Command::cargo_bin("shelve")?
+        .args(["-c", "20"])
+        .write_stdin(input)
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("column 20 is missing"));
+    Ok(())
+}
+
+// The warning fires once, not once per skipped row.
+#[test]
+fn test_too_high_column_warns_only_once() -> TestResult {
+    let input = fs::read_to_string("tests/inputs/tasks.csv")?;
+    let output = Command::cargo_bin("shelve")?.args(["-c", "20"]).write_stdin(input).output()?;
+    let warnings = String::from_utf8(output.stderr)?.matches("Warning:").count();
+    assert_eq!(warnings, 1, "expected exactly one warning");
+    Ok(())
+}
+
 // A failing path has to be named, otherwise a multi-file invocation gives no
 // clue which argument could not be opened.
 #[test]
