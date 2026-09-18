@@ -1,4 +1,3 @@
-use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::fs::File;
 
@@ -7,20 +6,24 @@ use anyhow::{Context, Result};
 #[derive(Debug)]
 pub struct Row {
     data: Vec<String>,
+    /// 0-based index of the grouping column, omitted when printing.
     index: usize,
 }
 
 impl std::fmt::Display for Row {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let mut cloned_data = self.data.clone();
-        cloned_data.remove(self.index - 1);
-        write!(f, "{}", cloned_data.join(", "))
+        // Skip the grouping column while printing rather than cloning the
+        // whole row and shifting every entry to remove one field.
+        let values: Vec<&str> =
+            self.data.iter().enumerate().filter(|(i, _)| *i != self.index).map(|(_, value)| value.as_str()).collect();
+        write!(f, "{}", values.join(", "))
     }
 }
 
 #[derive(Debug)]
 pub struct GroupedData {
     groups: BTreeMap<String, Vec<Row>>,
+    /// 0-based index of the grouping column.
     index: usize,
     warned_missing_column: bool,
 }
@@ -32,10 +35,13 @@ impl Row {
 }
 
 impl GroupedData {
-    fn new(index: usize) -> Self {
+    /// `column_number` is the 1-based number the CLI exposes. It is converted
+    /// to a 0-based index exactly once, here, so no other code has to
+    /// subtract one (or risk underflowing on an unvalidated zero).
+    fn new(column_number: usize) -> Self {
         GroupedData {
             groups: BTreeMap::new(),
-            index,
+            index: column_number - 1,
             warned_missing_column: false,
         }
     }
@@ -44,13 +50,13 @@ impl GroupedData {
         for result in rdr.records() {
             let record = result?;
 
-            match record.get(self.index - 1) {
-                Some(key) => {
-                    let row = Row::new(record.iter().map(ToString::to_string).collect(), self.index);
-                    self.add(key, row);
-                }
-                None => self.warn_missing_column(),
-            }
+            let Some(key) = record.get(self.index) else {
+                self.warn_missing_column();
+                continue;
+            };
+
+            let row = Row::new(record.iter().map(ToString::to_string).collect(), self.index);
+            self.add(key, row);
         }
 
         Ok(())
@@ -70,12 +76,13 @@ impl GroupedData {
 
         eprintln!(
             "Warning: column {} is missing from at least one record; those rows were skipped",
-            self.index
+            self.index + 1
         );
     }
 
-    pub fn from_files(filename_vec: &[String], index: usize) -> Result<Self> {
-        let mut groups = GroupedData::new(index);
+    /// `column_number` is the 1-based grouping column from the CLI.
+    pub fn from_files(filename_vec: &[String], column_number: usize) -> Result<Self> {
+        let mut groups = GroupedData::new(column_number);
 
         if filename_vec.is_empty() {
             let stdin = std::io::stdin().lock();
@@ -97,21 +104,13 @@ impl GroupedData {
     }
 
     pub fn add(&mut self, group_name: &str, row: Row) {
-        match self.groups.entry(group_name.to_string()) {
-            Entry::Occupied(mut entry) => {
-                entry.get_mut().push(row);
-            }
-            Entry::Vacant(entry) => {
-                entry.insert(vec![row]);
-            }
-        }
+        self.groups.entry(group_name.to_string()).or_default().push(row);
     }
 
-    pub fn get_groups(&self) -> Vec<&String> {
-        self.groups.keys().collect()
-    }
-
-    pub fn get_rows(&self, group_name: &str) -> Option<&Vec<Row>> {
-        self.groups.get(group_name)
+    /// The groups in key order, borrowed straight from the map. Iterating
+    /// this is all a caller needs: no key Vec to allocate and no per-group
+    /// lookup afterwards.
+    pub fn groups(&self) -> impl Iterator<Item = (&str, &[Row])> + '_ {
+        self.groups.iter().map(|(name, rows)| (name.as_str(), rows.as_slice()))
     }
 }
