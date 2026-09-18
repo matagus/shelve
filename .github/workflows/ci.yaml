@@ -29,6 +29,17 @@ jobs:
           path: target
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Install rustfmt and clippy
+        run: rustup component add rustfmt clippy
+
+      # Lint before building: both gates are cheap to satisfy and should fail the
+      # run fast, instead of surfacing only after the whole test suite.
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
       - name: Build
         run: cargo build --verbose
 
