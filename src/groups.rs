@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs::File;
+use std::io::{self, Write};
 use std::num::NonZeroUsize;
 use std::str::FromStr;
 
@@ -45,17 +46,40 @@ pub struct Row {
     /// iterates as `&str`, so copying every field into a `Vec<String>` would
     /// duplicate the entire input for nothing.
     data: csv::StringRecord,
-    /// 0-based index of the grouping column, omitted when printing.
-    index: usize,
 }
 
-impl std::fmt::Display for Row {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        // Skip the grouping column while printing rather than cloning the
-        // whole row and shifting every entry to remove one field.
-        let values: Vec<&str> =
-            self.data.iter().enumerate().filter(|(i, _)| *i != self.index).map(|(_, value)| value).collect();
-        write!(f, "{}", values.join(", "))
+impl Row {
+    fn new(data: csv::StringRecord) -> Self {
+        Row { data }
+    }
+
+    /// Write this row's fields to `out`, separated by `", "` and omitting the
+    /// field at `skip`.
+    ///
+    /// `skip` is a parameter rather than a field because it belongs to the
+    /// collection: every row in every group omits the same column and
+    /// [`GroupedData`] already stores which one, so a per-row copy duplicated
+    /// one `usize` per record for no reader's benefit.
+    ///
+    /// Each kept field goes straight to the writer. Collecting them into a
+    /// `Vec<&str>` and joining the result would allocate twice per printed line
+    /// to produce exactly these bytes.
+    fn write_to(&self, out: &mut impl Write, skip: usize) -> io::Result<()> {
+        let mut first = true;
+
+        for (index, value) in self.data.iter().enumerate() {
+            if index == skip {
+                continue;
+            }
+            if first {
+                first = false;
+            } else {
+                write!(out, ", ")?;
+            }
+            write!(out, "{value}")?;
+        }
+
+        writeln!(out)
     }
 }
 
@@ -65,12 +89,6 @@ pub struct GroupedData {
     /// 0-based index of the grouping column.
     index: usize,
     warned_missing_column: bool,
-}
-
-impl Row {
-    fn new(data: csv::StringRecord, index: usize) -> Self {
-        Row { data, index }
-    }
 }
 
 impl GroupedData {
@@ -98,7 +116,7 @@ impl GroupedData {
             // both, and the key was borrowed from the record that is about to
             // become the row's data.
             let key = key.to_owned();
-            let row = Row::new(record, self.index);
+            let row = Row::new(record);
             self.add(key, row);
         }
 
@@ -160,6 +178,19 @@ impl GroupedData {
     /// lookup afterwards.
     pub fn groups(&self) -> impl Iterator<Item = (&str, &[Row])> + '_ {
         self.groups.iter().map(|(name, rows)| (name.as_str(), rows.as_slice()))
+    }
+
+    /// Print `rows` one per line, without the grouping column.
+    ///
+    /// Formatting lives here rather than in a `Display` impl on [`Row`] because
+    /// the index to omit is this struct's state: a row cannot name it on its own
+    /// any more, and the caller should not have to thread it back in by hand.
+    pub fn write_rows(&self, rows: &[Row], out: &mut impl Write) -> io::Result<()> {
+        for row in rows {
+            row.write_to(out, self.index)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -248,6 +279,39 @@ mod tests {
             "parsing {ROWS} rows of 64 columns cost {delta} more allocations than the same rows \
              of 4 columns (4 wide: {narrow_allocations}, 64 wide: {wide_allocations}); row \
              handling should not allocate once per field"
+        );
+    }
+
+    /// Printing must cost nothing per row.
+    ///
+    /// The output is a fixed sequence of borrowed `&str` fields separated by
+    /// `", "`, so every byte can go straight to the writer. Collecting the kept
+    /// fields into a `Vec<&str>` and joining them allocates on every printed
+    /// line to produce exactly those bytes.
+    ///
+    /// The buffer is sized outside the measured region so the assertion is about
+    /// formatting alone, and the expected text is spelled out so the test also
+    /// pins the bytes: dropping the allocation must not change the output. The
+    /// first line is a header — `csv::Reader` consumes it — so the two records
+    /// under it are the two rows that get printed.
+    #[test]
+    fn printing_rows_does_not_allocate() {
+        let groups = parse("key,a,b,c\ng1,keep-a,keep-b,keep-c\ng1,keep-d,keep-e,keep-f\n");
+        let mut out: Vec<u8> = Vec::with_capacity(1 << 16);
+
+        let ((), allocations) = count_allocations(|| {
+            for (_, rows) in groups.groups() {
+                groups.write_rows(rows, &mut out).expect("writing to a Vec<u8> cannot fail");
+            }
+        });
+
+        assert_eq!(
+            allocations, 0,
+            "printing 2 rows cost {allocations} allocations; row formatting should write fields straight to the output"
+        );
+        assert_eq!(
+            String::from_utf8(out).expect("rows are written as UTF-8"),
+            "keep-a, keep-b, keep-c\nkeep-d, keep-e, keep-f\n"
         );
     }
 }
