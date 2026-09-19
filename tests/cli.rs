@@ -185,6 +185,21 @@ fn test_missing_file_error_includes_cause() -> TestResult {
     Ok(())
 }
 
+// A path that is not valid UTF-8 has to reach the filesystem layer. While the
+// arguments were `String`, clap rejected them during parsing with an "invalid
+// UTF-8" usage error (exit code 2); the file's contents are irrelevant here, so
+// a name that does not exist still separates the two failure modes.
+#[cfg(unix)]
+#[test]
+fn test_non_utf8_filename_reaches_open() -> TestResult {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = std::env::temp_dir().join(OsStr::from_bytes(b"shelve-not-here-\xff.csv"));
+    Command::cargo_bin("shelve")?.arg(path).assert().failure().code(1).stderr(predicates::str::contains("cannot open"));
+    Ok(())
+}
+
 // A parse failure gets the same treatment: without context it is impossible to
 // tell which of several inputs was malformed.
 #[test]
