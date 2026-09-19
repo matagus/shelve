@@ -1,6 +1,13 @@
 use assert_cmd::Command;
 use std::fs;
 
+// Gated with the two tests below: `std::os::unix` does not exist on Windows,
+// and an ungated `OsString` would sit unused there, failing `-D warnings`.
+#[cfg(unix)]
+use std::ffi::OsString;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
+
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 // --------------------------------------------------
@@ -205,9 +212,6 @@ fn test_malformed_file_is_named_in_error() -> TestResult {
 #[cfg(unix)]
 #[test]
 fn test_non_utf8_filename_is_named_in_error() -> TestResult {
-    use std::ffi::OsString;
-    use std::os::unix::ffi::OsStringExt;
-
     // A bare 0xff byte is never valid UTF-8, so this argument cannot be a `String`.
     let path = OsString::from_vec(b"tests/inputs/no-such-\xff-file.csv".to_vec());
 
@@ -228,9 +232,6 @@ fn test_non_utf8_filename_is_named_in_error() -> TestResult {
 #[cfg(unix)]
 #[test]
 fn test_non_utf8_filename_reads_committed_fixture() -> TestResult {
-    use std::ffi::OsString;
-    use std::os::unix::ffi::OsStringExt;
-
     let mut name: Vec<u8> = format!("shelve-non-utf8-fixture-{}.csv", std::process::id()).into_bytes();
     name.push(0xff);
     let path = std::env::temp_dir().join(OsString::from_vec(name));
