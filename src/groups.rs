@@ -39,7 +39,12 @@ impl std::fmt::Display for ColumnNumber {
 
 #[derive(Debug)]
 pub struct Row {
-    data: Vec<String>,
+    /// This row's fields, owned outright.
+    ///
+    /// A `StringRecord` already owns its data in a single allocation and
+    /// iterates as `&str`, so copying every field into a `Vec<String>` would
+    /// duplicate the entire input for nothing.
+    data: csv::StringRecord,
     /// 0-based index of the grouping column, omitted when printing.
     index: usize,
 }
@@ -49,7 +54,7 @@ impl std::fmt::Display for Row {
         // Skip the grouping column while printing rather than cloning the
         // whole row and shifting every entry to remove one field.
         let values: Vec<&str> =
-            self.data.iter().enumerate().filter(|(i, _)| *i != self.index).map(|(_, value)| value.as_str()).collect();
+            self.data.iter().enumerate().filter(|(i, _)| *i != self.index).map(|(_, value)| value).collect();
         write!(f, "{}", values.join(", "))
     }
 }
@@ -63,7 +68,7 @@ pub struct GroupedData {
 }
 
 impl Row {
-    fn new(data: Vec<String>, index: usize) -> Self {
+    fn new(data: csv::StringRecord, index: usize) -> Self {
         Row { data, index }
     }
 }
@@ -89,7 +94,11 @@ impl GroupedData {
                 continue;
             };
 
-            let row = Row::new(record.iter().map(ToString::to_string).collect(), self.index);
+            // Own the key before the record moves into the row: `add` needs
+            // both, and the key was borrowed from the record that is about to
+            // become the row's data.
+            let key = key.to_owned();
+            let row = Row::new(record, self.index);
             self.add(key, row);
         }
 
@@ -138,8 +147,12 @@ impl GroupedData {
         Ok(groups)
     }
 
-    pub fn add(&mut self, group_name: &str, row: Row) {
-        self.groups.entry(group_name.to_string()).or_default().push(row);
+    /// The group name is taken by value. The caller has to own it anyway — it
+    /// is borrowed from the record the row takes ownership of — and receiving
+    /// it owned means the map entry no longer clones the name on every row,
+    /// including rows for a group that already exists.
+    pub fn add(&mut self, group_name: String, row: Row) {
+        self.groups.entry(group_name).or_default().push(row);
     }
 
     /// The groups in key order, borrowed straight from the map. Iterating
@@ -147,5 +160,94 @@ impl GroupedData {
     /// lookup afterwards.
     pub fn groups(&self) -> impl Iterator<Item = (&str, &[Row])> + '_ {
         self.groups.iter().map(|(name, rows)| (name.as_str(), rows.as_slice()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::fmt::Write as _;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::{ColumnNumber, GroupedData};
+
+    /// Counts allocations, so a test can assert on the *shape* of the work and
+    /// not only on its output. This is installed for the unit-test binary only;
+    /// the integration tests under `tests/` are a separate binary and are
+    /// unaffected.
+    struct CountingAllocator;
+
+    static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe impl GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+    }
+
+    #[global_allocator]
+    static GLOBAL: CountingAllocator = CountingAllocator;
+
+    /// Run `f` and report how many allocations it made. Every measurement is a
+    /// fresh count, so callers never have to reason about what ran before.
+    fn count_allocations<R>(f: impl FnOnce() -> R) -> (R, usize) {
+        ALLOCATIONS.store(0, Ordering::SeqCst);
+        let value = f();
+        (value, ALLOCATIONS.load(Ordering::SeqCst))
+    }
+
+    fn parse(csv_text: &str) -> GroupedData {
+        let mut rdr = csv::Reader::from_reader(csv_text.as_bytes());
+        let mut groups = GroupedData::new("1".parse::<ColumnNumber>().expect("column 1 parses"));
+        groups.process(&mut rdr).expect("in-memory CSV reads");
+        groups
+    }
+
+    /// A `columns`-wide CSV with `rows` records. Column 1 is the grouping key
+    /// and only ever takes two values, so every width builds the same two
+    /// groups and the map cost is identical across the comparison.
+    fn build_csv(rows: usize, columns: usize) -> String {
+        let mut out = String::new();
+        for row in 0..rows {
+            write!(out, "g{}", row % 2).expect("writing to a String cannot fail");
+            for column in 1..columns {
+                write!(out, ",r{row}c{column}").expect("writing to a String cannot fail");
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Parsing must not get more expensive per row as the input gets wider.
+    ///
+    /// Copying each field out of the `StringRecord` into a `Vec<String>` costs
+    /// one allocation per field, so widening the row from 4 to 64 columns adds
+    /// roughly `rows * 60` allocations. Storing the record itself makes the
+    /// count essentially width-independent. The bound is deliberately loose —
+    /// it fails by an order of magnitude on the copying code and passes by an
+    /// even larger margin without it — so it cannot flake on allocator details.
+    #[test]
+    fn allocations_do_not_scale_with_column_count() {
+        const ROWS: usize = 200;
+
+        // Built outside the measured region: the comparison is about parsing.
+        let narrow = build_csv(ROWS, 4);
+        let wide = build_csv(ROWS, 64);
+
+        let (_, narrow_allocations) = count_allocations(|| parse(&narrow));
+        let (_, wide_allocations) = count_allocations(|| parse(&wide));
+
+        let delta = wide_allocations.saturating_sub(narrow_allocations);
+        assert!(
+            delta <= ROWS * 2,
+            "parsing {ROWS} rows of 64 columns cost {delta} more allocations than the same rows \
+             of 4 columns (4 wide: {narrow_allocations}, 64 wide: {wide_allocations}); row \
+             handling should not allocate once per field"
+        );
     }
 }
