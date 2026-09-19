@@ -40,7 +40,7 @@ impl std::fmt::Display for ColumnNumber {
 }
 
 #[derive(Debug)]
-pub struct Row {
+pub(crate) struct Row {
     /// This row's fields, owned outright.
     ///
     /// A `StringRecord` already owns its data in a single allocation and
@@ -50,7 +50,12 @@ pub struct Row {
 }
 
 impl Row {
-    fn new(data: csv::StringRecord) -> Self {
+    /// Construct a row from an already-parsed record.
+    ///
+    /// Crate-private on purpose: the crate has no lib target and this is the only
+    /// way to build a `Row`, so a wider visibility would advertise a constructor
+    /// no external caller could reach with usable input.
+    pub(crate) fn new(data: csv::StringRecord) -> Self {
         Row { data }
     }
 
@@ -85,7 +90,7 @@ impl Row {
 }
 
 #[derive(Debug)]
-pub struct GroupedData {
+pub(crate) struct GroupedData {
     groups: BTreeMap<String, Vec<Row>>,
     /// 0-based index of the grouping column.
     index: usize,
@@ -144,7 +149,7 @@ impl GroupedData {
 
     /// `column_number` is the 1-based grouping column from the CLI. It is typed
     /// so that the zero the CLI must not accept cannot be spelled here either.
-    pub fn from_files<P: AsRef<Path>>(filenames: &[P], column_number: ColumnNumber) -> Result<Self> {
+    pub(crate) fn from_files<P: AsRef<Path>>(filenames: &[P], column_number: ColumnNumber) -> Result<Self> {
         let mut groups = GroupedData::new(column_number);
 
         if filenames.is_empty() {
@@ -201,7 +206,7 @@ impl GroupedData {
     /// The groups in key order, borrowed straight from the map. Iterating
     /// this is all a caller needs: no key Vec to allocate and no per-group
     /// lookup afterwards.
-    pub fn groups(&self) -> impl Iterator<Item = (&str, &[Row])> + '_ {
+    pub(crate) fn groups(&self) -> impl Iterator<Item = (&str, &[Row])> + '_ {
         self.groups.iter().map(|(name, rows)| (name.as_str(), rows.as_slice()))
     }
 
@@ -210,7 +215,7 @@ impl GroupedData {
     /// Formatting lives here rather than in a `Display` impl on [`Row`] because
     /// the index to omit is this struct's state: a row cannot name it on its own
     /// any more, and the caller should not have to thread it back in by hand.
-    pub fn write_rows(&self, rows: &[Row], out: &mut impl Write) -> io::Result<()> {
+    pub(crate) fn write_rows(&self, rows: &[Row], out: &mut impl Write) -> io::Result<()> {
         for row in rows {
             row.write_to(out, self.index)?;
         }
