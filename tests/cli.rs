@@ -1,8 +1,7 @@
 use assert_cmd::Command;
 use std::fs;
 
-// Gated with the two tests below: `std::os::unix` does not exist on Windows,
-// and an ungated `OsString` would sit unused there, failing `-D warnings`.
+// Unix-only, for the non-UTF-8 filename tests below.
 #[cfg(unix)]
 use std::ffi::OsString;
 #[cfg(unix)]
@@ -205,14 +204,11 @@ fn test_malformed_file_is_named_in_error() -> TestResult {
     Ok(())
 }
 
-// On Unix a filename is an arbitrary byte string, not necessarily UTF-8.
-// Typing it as `String` made such a path unpassable at all: clap rejected the
-// argument before `shelve` ever ran, so the real "cannot open" error was never
-// reached and the exit code was clap's 2 instead of the program's 1.
+// A `String` filename cannot hold a non-UTF-8 path, and clap rejected the whole
+// argument before `shelve` ran. It has to reach `File::open` instead.
 #[cfg(unix)]
 #[test]
 fn test_non_utf8_filename_is_named_in_error() -> TestResult {
-    // A bare 0xff byte is never valid UTF-8, so this argument cannot be a `String`.
     let path = OsString::from_vec(b"tests/inputs/no-such-\xff-file.csv".to_vec());
 
     Command::cargo_bin("shelve")?
@@ -225,10 +221,8 @@ fn test_non_utf8_filename_is_named_in_error() -> TestResult {
     Ok(())
 }
 
-// The same argument must also *work* when the file exists: `File::open` takes
-// the path through `AsRef<Path>`, so nothing is lost by giving up `String`.
-// The committed fixture is reused under a non-UTF-8 name, which keeps the
-// expectation byte-identical to the UTF-8 case and needs no new fixture.
+// The argument must also work when the file exists. Reusing the committed
+// fixture under a non-UTF-8 name keeps the expectation identical.
 #[cfg(unix)]
 #[test]
 fn test_non_utf8_filename_reads_committed_fixture() -> TestResult {
@@ -237,20 +231,18 @@ fn test_non_utf8_filename_reads_committed_fixture() -> TestResult {
     let path = std::env::temp_dir().join(OsString::from_vec(name));
 
     let expected = fs::read_to_string("tests/expected/default-column.txt")?;
-    // Read the fixture first so a genuinely missing input still fails loudly;
-    // only a failure to *create* the oddly named copy is a platform limit.
+    // Read the fixture first: a missing input must still fail loudly, unlike
+    // the platform refusing to create the odd name below.
     let csv = fs::read("tests/inputs/tasks.csv")?;
 
-    // APFS and HFS+ refuse a non-UTF-8 filename outright with EILSEQ, so on
-    // macOS there is no such file to read and nothing to assert here. Parsing
-    // such an argument is still covered by the test above.
+    // APFS and HFS+ refuse to create a non-UTF-8 filename, so on macOS there
+    // is nothing to read here; argument parsing is covered by the test above.
     if let Err(err) = fs::write(&path, &csv) {
         eprintln!("skipping: this filesystem cannot hold a non-UTF-8 filename: {err}");
         return Ok(());
     }
 
-    // Capture, then clean up before asserting: a panicking assertion would
-    // otherwise leave the fixture behind in the temp dir.
+    // Capture rather than assert directly, so the temp file is still removed on failure.
     let out = Command::cargo_bin("shelve")?.arg(&path).output()?;
     fs::remove_file(&path)?;
 

@@ -144,9 +144,6 @@ impl GroupedData {
 
     /// `column_number` is the 1-based grouping column from the CLI. It is typed
     /// so that the zero the CLI must not accept cannot be spelled here either.
-    ///
-    /// Paths arrive as `AsRef<Path>` rather than `String` because a filename is
-    /// a byte string on Unix, and `String` would make valid paths unspellable.
     pub fn from_files<P: AsRef<Path>>(filenames: &[P], column_number: ColumnNumber) -> Result<Self> {
         let mut groups = GroupedData::new(column_number);
 
@@ -162,9 +159,7 @@ impl GroupedData {
                 // context covers parse errors, which are otherwise reported
                 // without saying which input they came from.
                 //
-                // `display()` because the name may not be UTF-8: it lossily
-                // replaces the undecodable bytes, which still identifies the
-                // file far better than an error that names nothing.
+                // `display()` because the name may not be UTF-8.
                 let file = File::open(filename).with_context(|| format!("cannot open '{}'", filename.display()))?;
                 let mut rdr = csv::Reader::from_reader(file);
                 groups.process(&mut rdr).with_context(|| format!("cannot read '{}'", filename.display()))?;
