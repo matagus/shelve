@@ -30,13 +30,31 @@ fn test_version() -> TestResult {
     Ok(())
 }
 
+// Column zero cannot be represented by the argument type, so clap rejects it
+// while parsing: a usage error with exit code 2, not a runtime `Error:` with 1.
 #[test]
 fn test_zero_column() -> TestResult {
     Command::cargo_bin("shelve")?
         .args(["-c", "0", "tests/inputs/tasks.csv"])
         .assert()
         .failure()
-        .stderr("Error: Column number must be greater than 0\n");
+        .code(2)
+        .stderr(predicates::str::contains("invalid value '0' for '--column-number"));
+    Ok(())
+}
+
+// A column number above the old `u8` cap is a grouping miss, not a parse error:
+// the warning path handles it and the run still succeeds.
+#[test]
+fn test_column_beyond_u8_range() -> TestResult {
+    let input = fs::read_to_string("tests/inputs/tasks.csv")?;
+    Command::cargo_bin("shelve")?
+        .args(["-c", "256"])
+        .write_stdin(input)
+        .assert()
+        .success()
+        .stdout("")
+        .stderr(predicates::str::contains("column 256 is missing"));
     Ok(())
 }
 

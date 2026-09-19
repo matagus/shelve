@@ -1,7 +1,41 @@
 use std::collections::BTreeMap;
 use std::fs::File;
+use std::num::NonZeroUsize;
+use std::str::FromStr;
 
 use anyhow::{Context, Result};
+
+/// The grouping column picked on the command line, counting from 1.
+///
+/// Wrapping [`NonZeroUsize`] makes column zero unrepresentable, so the 1-based
+/// (CLI) to 0-based (index) conversion has exactly one owner — [`ColumnNumber::index`]
+/// — and can no longer underflow there. `0` is rejected while parsing the
+/// argument, which turns it into a clap usage error instead of a runtime check
+/// in a different module.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ColumnNumber(NonZeroUsize);
+
+impl ColumnNumber {
+    /// The 0-based index this column number refers to.
+    #[must_use]
+    pub fn index(self) -> usize {
+        self.0.get() - 1
+    }
+}
+
+impl FromStr for ColumnNumber {
+    type Err = <NonZeroUsize as FromStr>::Err;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        NonZeroUsize::from_str(s).map(Self)
+    }
+}
+
+impl std::fmt::Display for ColumnNumber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 #[derive(Debug)]
 pub struct Row {
@@ -36,12 +70,12 @@ impl Row {
 
 impl GroupedData {
     /// `column_number` is the 1-based number the CLI exposes. It is converted
-    /// to a 0-based index exactly once, here, so no other code has to
-    /// subtract one (or risk underflowing on an unvalidated zero).
-    fn new(column_number: usize) -> Self {
+    /// to a 0-based index exactly once, here, so no other code has to subtract
+    /// one: the newtype cannot hold a zero, so the subtraction cannot underflow.
+    fn new(column_number: ColumnNumber) -> Self {
         GroupedData {
             groups: BTreeMap::new(),
-            index: column_number - 1,
+            index: column_number.index(),
             warned_missing_column: false,
         }
     }
@@ -80,8 +114,9 @@ impl GroupedData {
         );
     }
 
-    /// `column_number` is the 1-based grouping column from the CLI.
-    pub fn from_files(filename_vec: &[String], column_number: usize) -> Result<Self> {
+    /// `column_number` is the 1-based grouping column from the CLI. It is typed
+    /// so that the zero the CLI must not accept cannot be spelled here either.
+    pub fn from_files(filename_vec: &[String], column_number: ColumnNumber) -> Result<Self> {
         let mut groups = GroupedData::new(column_number);
 
         if filename_vec.is_empty() {
