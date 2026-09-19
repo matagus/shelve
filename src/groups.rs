@@ -112,12 +112,12 @@ impl GroupedData {
                 continue;
             };
 
-            // Own the key before the record moves into the row: `add` needs
-            // both, and the key was borrowed from the record that is about to
-            // become the row's data.
-            let key = key.to_owned();
-            let row = Row::new(record);
-            self.add(key, row);
+            // Resolve the destination while `key` still borrows `record`. The
+            // vector this returns borrows `self`, not the record, so that
+            // borrow ends with the call and `record` is free to move into the
+            // row on the next line.
+            let rows = self.group_rows(key);
+            rows.push(Row::new(record));
         }
 
         Ok(())
@@ -165,12 +165,33 @@ impl GroupedData {
         Ok(groups)
     }
 
-    /// The group name is taken by value. The caller has to own it anyway — it
-    /// is borrowed from the record the row takes ownership of — and receiving
-    /// it owned means the map entry no longer clones the name on every row,
-    /// including rows for a group that already exists.
-    pub fn add(&mut self, group_name: String, row: Row) {
-        self.groups.entry(group_name).or_default().push(row);
+    /// The rows belonging to `group_name`, creating the group if it is new.
+    ///
+    /// Borrowing the name keeps the hit path — the common case for grouped
+    /// data — free of allocations. `entry()` cannot express this: it takes an
+    /// owned key, so every row would have to build a `String` even when that
+    /// key is already in the map. Only a genuinely new group pays, once, for
+    /// the key it inserts.
+    ///
+    /// A new group therefore costs extra map descents. Closing that gap needs
+    /// the raw entry API, which is not an option here: `BTreeMap::raw_entry_mut`
+    /// does not exist on stable at all, and `HashMap::raw_entry_mut` is
+    /// nightly-only — moving to `HashMap` to get it would trade a rare extra
+    /// descent for the sorted group ordering this output depends on.
+    ///
+    /// The obvious `if let Some(rows) = self.groups.get_mut(name) { return rows }
+    /// …entry(name)` form is also unavailable: returning the borrowed vector
+    /// out of one arm while touching the map in the other is E0499 on stable
+    /// borrowck (rust#51545, fixed only under Polonius). Testing membership
+    /// first keeps every borrow short-lived at the cost of one more descent,
+    /// and the `expect` below is unreachable — the key is present by
+    /// construction on both paths.
+    fn group_rows(&mut self, group_name: &str) -> &mut Vec<Row> {
+        if !self.groups.contains_key(group_name) {
+            self.groups.insert(group_name.to_owned(), Vec::new());
+        }
+
+        self.groups.get_mut(group_name).expect("the group was just inserted if it was missing")
     }
 
     /// The groups in key order, borrowed straight from the map. Iterating
@@ -199,8 +220,11 @@ mod tests {
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::fmt::Write as _;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Mutex, MutexGuard, PoisonError};
 
-    use super::{ColumnNumber, GroupedData};
+    use csv::StringRecord;
+
+    use super::{ColumnNumber, GroupedData, Row};
 
     /// Counts allocations, so a test can assert on the *shape* of the work and
     /// not only on its output. This is installed for the unit-test binary only;
@@ -224,8 +248,34 @@ mod tests {
     #[global_allocator]
     static GLOBAL: CountingAllocator = CountingAllocator;
 
+    /// Serialises the allocation-sensitive tests.
+    ///
+    /// `ALLOCATIONS` is one process-wide counter and `cargo test` runs tests on
+    /// several threads, so two counting tests overlapping corrupt both: each
+    /// sees the other's allocations, and one test's `store(0)` can land in the
+    /// middle of another's measurement and truncate it. See `measurement_lock`.
+    static MEASUREMENT: Mutex<()> = Mutex::new(());
+
+    /// Take exclusive ownership of the allocation counter for a whole test.
+    ///
+    /// Isolating only the measured region is not enough. `ALLOCATIONS` counts
+    /// every allocation in the process, so a neighbouring test building its CSV
+    /// fixture on another thread inflates this one's numbers just as surely as
+    /// a second measurement would. Bind the returned guard to a name at the top
+    /// of each allocation-sensitive test and hold it until the body finishes;
+    /// that is what makes the counts reproducible under `cargo test`'s default
+    /// parallelism.
+    ///
+    /// Poisoning is ignored on purpose: the lock guards a counter, not an
+    /// invariant, so a panic in one test must not wedge the rest of the suite.
+    fn measurement_lock() -> MutexGuard<'static, ()> {
+        MEASUREMENT.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Run `f` and report how many allocations it made. Every measurement is a
     /// fresh count, so callers never have to reason about what ran before.
+    ///
+    /// The enclosing test must hold `measurement_lock`.
     fn count_allocations<R>(f: impl FnOnce() -> R) -> (R, usize) {
         ALLOCATIONS.store(0, Ordering::SeqCst);
         let value = f();
@@ -266,6 +316,8 @@ mod tests {
     fn allocations_do_not_scale_with_column_count() {
         const ROWS: usize = 200;
 
+        let _guard = measurement_lock();
+
         // Built outside the measured region: the comparison is about parsing.
         let narrow = build_csv(ROWS, 4);
         let wide = build_csv(ROWS, 64);
@@ -296,6 +348,8 @@ mod tests {
     /// under it are the two rows that get printed.
     #[test]
     fn printing_rows_does_not_allocate() {
+        let _guard = measurement_lock();
+
         let groups = parse("key,a,b,c\ng1,keep-a,keep-b,keep-c\ng1,keep-d,keep-e,keep-f\n");
         let mut out: Vec<u8> = Vec::with_capacity(1 << 16);
 
@@ -312,6 +366,76 @@ mod tests {
         assert_eq!(
             String::from_utf8(out).expect("rows are written as UTF-8"),
             "keep-a, keep-b, keep-c\nkeep-d, keep-e, keep-f\n"
+        );
+    }
+
+    /// Parsing more rows into groups that already exist must not add a
+    /// per-row allocation.
+    ///
+    /// This is the same claim as `adding_rows_to_an_existing_group_does_not_allocate_a_key`,
+    /// measured through the real `process` path rather than against the map
+    /// directly, so a key allocation reintroduced into the reader loop is
+    /// caught too. Both inputs group under the same two keys and differ only
+    /// in row count, so their delta is the per-row cost: the `csv` reader's own
+    /// record allocations, which are inherent, and nothing else. Measured here
+    /// at about 3 per row; handing `entry()` an owned key adds a fourth, which
+    /// is what the budget below rejects.
+    #[test]
+    fn parsing_more_rows_into_existing_groups_adds_no_key_allocation() {
+        const FEW: usize = 128;
+        const MANY: usize = 256;
+        const STEP: usize = MANY - FEW;
+
+        let _guard = measurement_lock();
+
+        // Built outside the measured region: the comparison is about parsing.
+        let few = build_csv(FEW, 4);
+        let many = build_csv(MANY, 4);
+
+        let (_, few_allocations) = count_allocations(|| parse(&few));
+        let (_, many_allocations) = count_allocations(|| parse(&many));
+
+        let delta = many_allocations.saturating_sub(few_allocations);
+        assert!(
+            delta <= STEP * 7 / 2,
+            "parsing {STEP} extra rows into the same two groups cost {delta} allocations \
+             ({FEW} rows: {few_allocations}, {MANY} rows: {many_allocations}); that exceeds the \
+             3.5-per-row budget, so something beyond the reader is allocating once per row"
+        );
+    }
+
+    /// Naming a group must cost nothing once that group exists.
+    ///
+    /// `entry()` takes an owned key, so routing rows through it makes the
+    /// caller build a `String` for every row even when the key is already in
+    /// the map: N rows across K groups cost N allocations where K would do.
+    /// Two groups over 256 rows makes 254 of those keys pure waste.
+    ///
+    /// The keys and the rows are both built outside the measured region, so
+    /// the count is the map's own cost and nothing else — no CSV reader, no
+    /// formatting, no allocator noise from the fixture.
+    #[test]
+    fn adding_rows_to_an_existing_group_does_not_allocate_a_key() {
+        const ROWS: usize = 256;
+
+        let _guard = measurement_lock();
+
+        let keys: Vec<String> = (0..ROWS).map(|row| format!("g{}", row % 2)).collect();
+        let rows: Vec<Row> = (0..ROWS).map(|_| Row::new(StringRecord::from(vec!["g0", "a", "b", "c"]))).collect();
+        let mut rows = rows.into_iter();
+
+        let mut groups = GroupedData::new("1".parse::<ColumnNumber>().expect("column 1 parses"));
+
+        let ((), allocations) = count_allocations(|| {
+            for key in &keys {
+                groups.group_rows(key).push(rows.next().expect("one row per key"));
+            }
+        });
+
+        assert!(
+            allocations <= ROWS / 4,
+            "adding {ROWS} rows to 2 groups cost {allocations} allocations; only the 2 distinct \
+             group names should allocate, not one per row"
         );
     }
 }
