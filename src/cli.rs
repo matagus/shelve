@@ -25,9 +25,10 @@ impl Cli {
         for (group, rows) in groups.groups() {
             writeln!(stream, "{group}:\n")?;
 
-            for row in rows {
-                writeln!(stream, "{row}")?;
-            }
+            // `GroupedData` owns the grouping column's index, so it formats the
+            // rows too: a `Display` impl on `Row` would have to be told which
+            // field to omit by whoever happened to print it.
+            groups.write_rows(rows, &mut stream)?;
             writeln!(stream)?;
         }
 
