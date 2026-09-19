@@ -1,13 +1,16 @@
 use anyhow::Result;
 use clap::Parser;
 use std::io::{self, Write};
+use std::path::PathBuf;
 
 use crate::groups::{ColumnNumber, GroupedData};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 pub struct Cli {
-    pub filenames: Vec<String>,
+    // `PathBuf`, not `String`: on Unix a filename is an arbitrary byte string,
+    // and clap rejects any argument that is not valid UTF-8.
+    pub filenames: Vec<PathBuf>,
 
     /// Column number to group by
     #[arg(short, long, default_value = "1")]

@@ -1,6 +1,12 @@
 use assert_cmd::Command;
 use std::fs;
 
+// Unix-only, for the non-UTF-8 filename tests below.
+#[cfg(unix)]
+use std::ffi::OsString;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
+
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 // --------------------------------------------------
@@ -195,5 +201,57 @@ fn test_malformed_file_is_named_in_error() -> TestResult {
         .failure()
         .stderr(predicates::str::contains("cannot read 'tests/inputs/malformed.csv'"))
         .stderr(predicates::str::contains("CSV error"));
+    Ok(())
+}
+
+// A `String` filename cannot hold a non-UTF-8 path, and clap rejected the whole
+// argument before `shelve` ran. It has to reach `File::open` instead.
+#[cfg(unix)]
+#[test]
+fn test_non_utf8_filename_is_named_in_error() -> TestResult {
+    let path = OsString::from_vec(b"tests/inputs/no-such-\xff-file.csv".to_vec());
+
+    Command::cargo_bin("shelve")?
+        .arg(path)
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicates::str::contains("cannot open"))
+        .stderr(predicates::str::contains("No such file or directory"));
+    Ok(())
+}
+
+// The argument must also work when the file exists. Reusing the committed
+// fixture under a non-UTF-8 name keeps the expectation identical.
+#[cfg(unix)]
+#[test]
+fn test_non_utf8_filename_reads_committed_fixture() -> TestResult {
+    let mut name: Vec<u8> = format!("shelve-non-utf8-fixture-{}.csv", std::process::id()).into_bytes();
+    name.push(0xff);
+    let path = std::env::temp_dir().join(OsString::from_vec(name));
+
+    let expected = fs::read_to_string("tests/expected/default-column.txt")?;
+    // Read the fixture first: a missing input must still fail loudly, unlike
+    // the platform refusing to create the odd name below.
+    let csv = fs::read("tests/inputs/tasks.csv")?;
+
+    // APFS and HFS+ refuse to create a non-UTF-8 filename, so on macOS there
+    // is nothing to read here; argument parsing is covered by the test above.
+    if let Err(err) = fs::write(&path, &csv) {
+        eprintln!("skipping: this filesystem cannot hold a non-UTF-8 filename: {err}");
+        return Ok(());
+    }
+
+    // Capture rather than assert directly, so the temp file is still removed on failure.
+    let out = Command::cargo_bin("shelve")?.arg(&path).output()?;
+    fs::remove_file(&path)?;
+
+    assert!(
+        out.status.success(),
+        "shelve exited with {}: {}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8(out.stdout)?, expected);
     Ok(())
 }

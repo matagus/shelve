@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{self, Write};
 use std::num::NonZeroUsize;
+use std::path::Path;
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
@@ -143,22 +144,25 @@ impl GroupedData {
 
     /// `column_number` is the 1-based grouping column from the CLI. It is typed
     /// so that the zero the CLI must not accept cannot be spelled here either.
-    pub fn from_files(filename_vec: &[String], column_number: ColumnNumber) -> Result<Self> {
+    pub fn from_files<P: AsRef<Path>>(filenames: &[P], column_number: ColumnNumber) -> Result<Self> {
         let mut groups = GroupedData::new(column_number);
 
-        if filename_vec.is_empty() {
+        if filenames.is_empty() {
             let stdin = std::io::stdin().lock();
             let mut rdr = csv::Reader::from_reader(stdin);
             groups.process(&mut rdr)?;
         } else {
-            for filename in filename_vec {
+            for filename in filenames {
+                let filename = filename.as_ref();
                 // Name the file: with several arguments a bare "No such file or
                 // directory" leaves no way to tell which one failed. The same
                 // context covers parse errors, which are otherwise reported
                 // without saying which input they came from.
-                let file = File::open(filename).with_context(|| format!("cannot open '{filename}'"))?;
+                //
+                // `display()` because the name may not be UTF-8.
+                let file = File::open(filename).with_context(|| format!("cannot open '{}'", filename.display()))?;
                 let mut rdr = csv::Reader::from_reader(file);
-                groups.process(&mut rdr).with_context(|| format!("cannot read '{filename}'"))?;
+                groups.process(&mut rdr).with_context(|| format!("cannot read '{}'", filename.display()))?;
             }
         }
 
