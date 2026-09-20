@@ -1,14 +1,14 @@
 [package]
 name = "shelve"
 version = "0.3.1"
-edition = "2021"
+edition = "2024"
 description = "A simple command-line tool to pretty print CSV files grouped by a column"
 license = "MIT"
 repository = "https://github.com/matagus/shelve"
 readme = "README.md"
 keywords = ["csv", "cli", "grouping"]
 categories = ["command-line-utilities", "text-processing"]
-rust-version = "1.70"
+rust-version = "1.85"
 
 [dependencies]
 anyhow = "1.0.104"
