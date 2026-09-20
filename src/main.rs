@@ -4,9 +4,6 @@ use std::process::ExitCode;
 use clap::Parser;
 
 mod cli;
-mod groups;
-#[cfg(test)]
-mod testing;
 
 use cli::Cli;
 
