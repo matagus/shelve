@@ -1,0 +1,5 @@
+tests/inputs/*.csv text eol=lf
+tests/expected/*.txt text eol=lf
+*.rs text eol=lf
+*.md text eol=lf
+Cargo.toml text eol=lf
