@@ -126,7 +126,7 @@ CHANGED=$(
     # `--untracked-files=no`: untracked files come from the next command, and
     # listing them twice would put one path on the staging list twice.
     git -C "$WT" -c core.quotePath=false status --porcelain --untracked-files=no |
-      cut -c 3-
+      cut -c 4-
     git -C "$WT" ls-files --others --exclude-standard
   } | sed -e '/^$/d' | sort -u
 )

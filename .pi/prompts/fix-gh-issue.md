@@ -83,11 +83,9 @@ Smallest diff that resolves the issue, its tests and any `tests/inputs/` + `test
 
 ## Report — exactly 12 lines
 
-```
 PR: <PR_URL verbatim>
 BRANCH: … | BASE: … | WT: …
 SUMMARY: one line
-FILES: …
 VERDICT: <the Phase 2 VERDICT line>
 GATE: GATE=… (fmt clippy check build test alloc)
 SMOKE: SMOKE=… DIFF=…
@@ -96,4 +94,3 @@ DECISIONS: defaults taken | asked via ask_user: …
 CALLS: n script + n other | STOPS: none | phase+reason
 TRACKER: all done/skipped/blocked | FOLLOW-UPS: …
 CLEANUP: worktree left in place — human runs `scripts/wt-cleanup.sh`, `--merged`, or `scripts/wt-cleanup.sh <branch>`
-```
