@@ -19,11 +19,16 @@ pub struct Cli {
     /// Treat the first record as data instead of a header row
     #[arg(long)]
     pub no_headers: bool,
+
+    /// Field delimiter character (default: ',')
+    #[arg(short, long, default_value = ",")]
+    pub delimiter: char,
 }
 
 impl Cli {
     pub fn run(&self) -> Result<()> {
-        let groups: GroupedData = GroupedData::from_files(&self.filenames, self.column_number, self.no_headers)?;
+        let groups: GroupedData =
+            GroupedData::from_files(&self.filenames, self.column_number, self.no_headers, self.delimiter)?;
 
         // Use a BufWriter to improve performance by reducing the number of write calls
         let stdout = io::stdout();

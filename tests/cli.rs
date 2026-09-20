@@ -477,6 +477,16 @@ fn test_stdout_closed_entirely_exits_zero() -> TestResult {
     Ok(())
 }
 
+/// A custom delimiter (`\t`) must be respected for both parsing and grouping.
+/// This is the acceptance test for issue #17: `-d` / `--delimiter`.
+#[test]
+fn test_custom_delimiter_tab() -> TestResult {
+    run(
+        &["-d", "\t", "-c", "1", "tests/inputs/tasks.tsv"],
+        "tests/expected/delimiter-tsv.txt",
+    )
+}
+
 /// Without `--no-headers`, the first record is consumed as a header row.
 /// With it, every record is data — including the first one. The fixture
 /// has three rows and no header; grouping on column 3 must produce all
