@@ -7,5 +7,6 @@ Arguments:
 
 Options:
   -c, --column-number <COLUMN_NUMBER>  Column number to group by [default: 1]
+      --no-headers                     Treat the first record as data instead of a header row
   -h, --help                           Print help
   -V, --version                        Print version

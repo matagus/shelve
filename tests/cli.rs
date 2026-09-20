@@ -476,3 +476,28 @@ fn test_stdout_closed_entirely_exits_zero() -> TestResult {
     assert_eq!(stderr, "", "nothing may be printed to stderr");
     Ok(())
 }
+
+/// Without `--no-headers`, the first record is consumed as a header row.
+/// With it, every record is data — including the first one. The fixture
+/// has three rows and no header; grouping on column 3 must produce all
+/// three rows across two groups, not silently drop the first.
+#[test]
+fn test_no_headers_treats_first_record_as_data() -> TestResult {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_shelve"))
+        .args(["--no-headers", "-c", "3", "tests/inputs/headerless.csv"])
+        .output()?;
+
+    assert!(out.status.success(), "exited with {}", out.status);
+    let stdout = String::from_utf8(out.stdout)?;
+
+    // All three input rows must appear in the output.
+    assert!(stdout.contains("1, Deploy"), "first row missing: {stdout}");
+    assert!(stdout.contains("2, Triage"), "second row missing: {stdout}");
+    assert!(stdout.contains("3, Refactor"), "third row missing: {stdout}");
+
+    // Two groups, sorted by key.
+    assert!(stdout.contains("Jane:"), "Jane group missing");
+    assert!(stdout.contains("John:"), "John group missing");
+
+    Ok(())
+}

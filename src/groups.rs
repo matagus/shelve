@@ -149,12 +149,17 @@ impl GroupedData {
 
     /// `column_number` is the 1-based grouping column from the CLI. It is typed
     /// so that the zero the CLI must not accept cannot be spelled here either.
-    pub(crate) fn from_files<P: AsRef<Path>>(filenames: &[P], column_number: ColumnNumber) -> Result<Self> {
+    pub(crate) fn from_files<P: AsRef<Path>>(
+        filenames: &[P],
+        column_number: ColumnNumber,
+        no_headers: bool,
+    ) -> Result<Self> {
         let mut groups = GroupedData::new(column_number);
+        let has_headers = !no_headers;
 
         if filenames.is_empty() {
             let stdin = std::io::stdin().lock();
-            let mut rdr = csv::Reader::from_reader(stdin);
+            let mut rdr = csv::ReaderBuilder::new().has_headers(has_headers).from_reader(stdin);
             groups.process(&mut rdr)?;
         } else {
             for filename in filenames {
@@ -166,7 +171,7 @@ impl GroupedData {
                 //
                 // `display()` because the name may not be UTF-8.
                 let file = File::open(filename).with_context(|| format!("cannot open '{}'", filename.display()))?;
-                let mut rdr = csv::Reader::from_reader(file);
+                let mut rdr = csv::ReaderBuilder::new().has_headers(has_headers).from_reader(file);
                 groups.process(&mut rdr).with_context(|| format!("cannot read '{}'", filename.display()))?;
             }
         }
