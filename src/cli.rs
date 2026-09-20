@@ -29,15 +29,7 @@ impl Cli {
         let stdout = io::stdout();
         let mut stream = io::BufWriter::new(stdout);
 
-        for (group, rows) in groups.groups() {
-            writeln!(stream, "{group}:\n")?;
-
-            // `GroupedData` owns the grouping column's index, so it formats the
-            // rows too: a `Display` impl on `Row` would have to be told which
-            // field to omit by whoever happened to print it.
-            groups.write_rows(rows, &mut stream)?;
-            writeln!(stream)?;
-        }
+        groups.write_to(&mut stream)?;
 
         // Flush explicitly: an error that only surfaces when the `BufWriter` is
         // dropped would be swallowed, and a closed stdout pipe would then go

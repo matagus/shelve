@@ -227,6 +227,22 @@ impl GroupedData {
 
         Ok(())
     }
+
+    /// Render the full grouped layout into any writable sink.
+    ///
+    /// This is the same layout that [`Cli::run`](crate::cli::Cli::run) used to
+    /// build inline: group header with colon, blank line, rows, trailing blank
+    /// line, repeated for every group in key order. Moving it here makes the
+    /// output unit-testable against a `Vec<u8>` without spawning the binary.
+    pub(crate) fn write_to<W: Write>(&self, out: &mut W) -> io::Result<()> {
+        for (group, rows) in self.groups() {
+            writeln!(out, "{group}:\n")?;
+            self.write_rows(rows, out)?;
+            writeln!(out)?;
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -310,6 +326,21 @@ mod tests {
         assert_eq!(
             String::from_utf8(out).expect("rows are written as UTF-8"),
             "keep-a, keep-b, keep-c\nkeep-d, keep-e, keep-f\n"
+        );
+    }
+
+    /// `write_to` renders the full grouped layout into any writable sink,
+    /// making the output unit-testable without spawning the binary.
+    #[test]
+    fn write_to_renders_full_layout_into_buffer() {
+        let groups = parse("key,a,b,c\ng1,keep-a,keep-b,keep-c\ng2,keep-d,keep-e,keep-f\n");
+        let mut out: Vec<u8> = Vec::new();
+
+        groups.write_to(&mut out).expect("writing to a Vec<u8> cannot fail");
+
+        assert_eq!(
+            String::from_utf8(out).expect("output is UTF-8"),
+            "g1:\n\nkeep-a, keep-b, keep-c\n\ng2:\n\nkeep-d, keep-e, keep-f\n\n"
         );
     }
 
