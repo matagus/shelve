@@ -39,8 +39,9 @@ impl std::fmt::Display for ColumnNumber {
     }
 }
 
+/// A single CSV record, stored as its raw fields.
 #[derive(Debug)]
-pub(crate) struct Row {
+pub struct Row {
     /// This row's fields, owned outright.
     ///
     /// A `StringRecord` already owns its data in a single allocation and
@@ -51,11 +52,8 @@ pub(crate) struct Row {
 
 impl Row {
     /// Construct a row from an already-parsed record.
-    ///
-    /// Crate-private on purpose: the crate has no lib target and this is the only
-    /// way to build a `Row`, so a wider visibility would advertise a constructor
-    /// no external caller could reach with usable input.
-    pub(crate) fn new(data: csv::StringRecord) -> Self {
+    #[must_use]
+    pub fn new(data: csv::StringRecord) -> Self {
         Row { data }
     }
 
@@ -89,8 +87,9 @@ impl Row {
     }
 }
 
+/// CSV records grouped by a single column's values.
 #[derive(Debug)]
-pub(crate) struct GroupedData {
+pub struct GroupedData {
     groups: BTreeMap<String, Vec<Row>>,
     /// 0-based index of the grouping column.
     index: usize,
@@ -101,7 +100,9 @@ impl GroupedData {
     /// `column_number` is the 1-based number the CLI exposes. It is converted
     /// to a 0-based index exactly once, here, so no other code has to subtract
     /// one: the newtype cannot hold a zero, so the subtraction cannot underflow.
-    fn new(column_number: ColumnNumber) -> Self {
+    /// Create an empty grouping keyed by `column_number`.
+    #[must_use]
+    pub fn new(column_number: ColumnNumber) -> Self {
         GroupedData {
             groups: BTreeMap::new(),
             index: column_number.index(),
@@ -147,9 +148,15 @@ impl GroupedData {
         );
     }
 
-    /// `column_number` is the 1-based grouping column from the CLI. It is typed
-    /// so that the zero the CLI must not accept cannot be spelled here either.
-    pub(crate) fn from_files<P: AsRef<Path>>(
+    /// Read CSV files and group their records by the chosen column.
+    ///
+    /// When `filenames` is empty, stdin is read instead. Records are split on
+    /// `delimiter`, which matches [`csv::ReaderBuilder::delimiter`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any file cannot be opened or contains invalid CSV.
+    pub fn from_files<P: AsRef<Path>>(
         filenames: &[P],
         column_number: ColumnNumber,
         no_headers: bool,
@@ -213,7 +220,8 @@ impl GroupedData {
     /// The groups in key order, borrowed straight from the map. Iterating
     /// this is all a caller needs: no key Vec to allocate and no per-group
     /// lookup afterwards.
-    pub(crate) fn groups(&self) -> impl Iterator<Item = (&str, &[Row])> + '_ {
+    /// The groups in key order, borrowed straight from the map.
+    pub fn groups(&self) -> impl Iterator<Item = (&str, &[Row])> + '_ {
         self.groups.iter().map(|(name, rows)| (name.as_str(), rows.as_slice()))
     }
 
@@ -222,7 +230,12 @@ impl GroupedData {
     /// Formatting lives here rather than in a `Display` impl on [`Row`] because
     /// the index to omit is this struct's state: a row cannot name it on its own
     /// any more, and the caller should not have to thread it back in by hand.
-    pub(crate) fn write_rows(&self, rows: &[Row], out: &mut impl Write) -> io::Result<()> {
+    /// Print `rows` one per line, without the grouping column.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if writing to `out` fails.
+    pub fn write_rows(&self, rows: &[Row], out: &mut impl Write) -> io::Result<()> {
         for row in rows {
             row.write_to(out, self.index)?;
         }
@@ -232,11 +245,14 @@ impl GroupedData {
 
     /// Render the full grouped layout into any writable sink.
     ///
-    /// This is the same layout that [`Cli::run`](crate::cli::Cli::run) used to
-    /// build inline: group header with colon, blank line, rows, trailing blank
-    /// line, repeated for every group in key order. Moving it here makes the
-    /// output unit-testable against a `Vec<u8>` without spawning the binary.
-    pub(crate) fn write_to<W: Write>(&self, out: &mut W) -> io::Result<()> {
+    /// Renders the full grouped layout: group header with colon, blank line,
+    /// rows, trailing blank line, repeated for every group in key order.
+    /// Render the full grouped layout into any writable sink.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if writing to `out` fails.
+    pub fn write_to<W: Write>(&self, out: &mut W) -> io::Result<()> {
         for (group, rows) in self.groups() {
             writeln!(out, "{group}:\n")?;
             self.write_rows(rows, out)?;
