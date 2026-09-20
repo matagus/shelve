@@ -33,8 +33,13 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
 
+      # `-D clippy::pedantic` matches what is run locally before a PR is opened.
+      # CI used to check only `-D warnings`, so a diff that passed here could
+      # still be sent back by the local gate — and the discrepancy cost more
+      # time to rediscover on each run than the lint ever saved. Keeping the two
+      # identical means "green locally" and "green in CI" are the same claim.
       - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings -D clippy::pedantic
 
       - name: Build
         run: cargo build --verbose
@@ -44,3 +49,21 @@ jobs:
 
       - name: Test
         run: cargo test --verbose
+
+      # The allocation budgets in `src/groups.rs` are the standing gate for
+      # performance work: a named step, so a regression fails here with its own
+      # line in the log instead of hiding among the ~30 tests above. `--release`
+      # because an optimiser can fold away the very allocation a budget exists
+      # to catch; the counts are currently identical in both profiles, so this
+      # costs nothing and rules out the difference. The filter matches all four
+      # budget tests by name.
+      - name: Allocation budget
+        run: cargo test --release --bin shelve -- allocat --nocapture
+
+      # Prints the exact counts those budgets only bound, in a greppable
+      # `alloc op=... total=N` form. The test is `#[ignore]`d and asserts
+      # nothing, so this step cannot fail the build; it exists so the current
+      # numbers are already in the log of the latest run when a performance
+      # issue is triaged, instead of having to be re-derived locally.
+      - name: Allocation report
+        run: cargo test --release --bin shelve -- --ignored --nocapture

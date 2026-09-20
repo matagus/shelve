@@ -32,8 +32,10 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
 
+      # Same lint level as the `verify` job in ci.yaml: this job gates
+      # `cargo publish`, so a diff that is clean in CI must be clean here too.
       - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings -D clippy::pedantic
 
       - name: Test
         run: cargo test --verbose

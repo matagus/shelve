@@ -1,0 +1,19 @@
+# Share one build cache across every git worktree of this repository.
+#
+# Why: the fix-gh-issue flow builds each issue in its own worktree under `.wt/`,
+# and phase 8 does a cold `cargo build --release` there. With cargo's default
+# per-checkout `target/`, every worktree recompiled the whole dependency graph
+# from scratch on every run, and the artifacts were thrown away with the
+# worktree. Pointing all of them at one directory outside any checkout makes the
+# second issue of the day cost a few seconds instead of a full cold build.
+#
+# Why relative (`../.shared-target`) rather than an absolute path or
+# `$CARGO_HOME`: cargo resolves it against the location of this file, so the
+# cache lands as a sibling of each checkout. That survives clones, moves, CI
+# runners and different usernames without editing anything, and keeps the cache
+# out of every worktree's own tree (where `git status` would see it).
+#
+# The override order is env var > this file > cargo default, so an operator who
+# wants a machine-wide cache can still set CARGO_TARGET_DIR and win.
+[build]
+target-dir = "../.shared-target"

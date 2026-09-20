@@ -279,3 +279,200 @@ fn test_non_utf8_filename_reads_committed_fixture() -> TestResult {
     assert_eq!(String::from_utf8(out.stdout)?, expected);
     Ok(())
 }
+
+// ---------------------------------------------------------------
+// Edge cases around the input bytes and the shape of a row, rather
+// than around argument parsing. Each one pins a behaviour that is
+// easy to break without touching the code path the tests above cover.
+// ---------------------------------------------------------------
+
+// The grouping column is the only column, so every printed row omits its one
+// field and comes out as a bare newline. The group headers and the blank line
+// that follows each group still have to be there: "no columns left to print"
+// must not collapse the layout.
+#[test]
+fn test_single_column_file_prints_headers_and_blank_rows() -> TestResult {
+    run(
+        &["-c", "1", "tests/inputs/single-column.csv"],
+        "tests/expected/single-column.txt",
+    )
+}
+
+// Rows that share a key but are not adjacent in the input must still land in
+// one group. Grouping is by map lookup, not by run-length, so interleaved keys
+// are the case that a "group while the key is unchanged" implementation would
+// silently split.
+#[test]
+fn test_non_adjacent_duplicate_keys_group_together() -> TestResult {
+    run(
+        &["-c", "3", "tests/inputs/duplicate-keys.csv"],
+        "tests/expected/duplicate-keys.txt",
+    )
+}
+
+// A CRLF file is what a Windows user actually has. The csv reader strips the
+// trailing `\r` from the last field, so it must not reach the output either:
+// a stray carriage return is invisible in a terminal and corrupts a redirect.
+#[test]
+fn test_crlf_input_leaves_no_carriage_return_in_output() -> TestResult {
+    let out = Command::cargo_bin("shelve")?.args(["-c", "3", "tests/inputs/crlf.csv"]).output()?;
+    assert!(out.status.success(), "shelve exited with {}", out.status);
+
+    let stdout = String::from_utf8(out.stdout)?;
+    assert!(
+        !stdout.contains('\r'),
+        "output still contains a carriage return:\n{stdout:?}"
+    );
+
+    let expected = fs::read_to_string("tests/expected/crlf-column-3.txt")?;
+    assert_eq!(stdout, expected);
+    Ok(())
+}
+
+// A UTF-8 BOM is invisible and common (Excel writes it). It belongs to the
+// header record, which the reader consumes, so it must neither shift the
+// columns nor leak into a group name: the output has to be byte-identical to
+// the same file without the BOM, which is exactly what this compares against.
+#[test]
+fn test_utf8_bom_does_not_shift_columns_or_leak() -> TestResult {
+    run(&["tests/inputs/utf8-bom.csv"], "tests/expected/default-column.txt")
+}
+
+// A header with no records is an empty list, not an error — and not a warning
+// either. The "column is missing" warning fires on records that lack the
+// grouping column; with no records there is nothing to warn about, and a
+// warning here would be indistinguishable from real data loss.
+#[test]
+fn test_header_only_file_is_empty_not_an_error() -> TestResult {
+    Command::cargo_bin("shelve")?.arg("tests/inputs/header-only.csv").assert().success().stdout("").stderr("");
+    Ok(())
+}
+
+// A row far wider than the fixtures above. Printing omits one field and joins
+// the rest, so width is where an off-by-one in the separator logic shows up:
+// at 32 columns a leading, trailing or doubled ", " is unmissable.
+#[test]
+fn test_very_wide_row() -> TestResult {
+    run(&["-c", "1", "tests/inputs/wide-row.csv"], "tests/expected/wide-row.txt")
+}
+
+// Non-ASCII keys have to survive both as map keys and as printed group names.
+#[test]
+fn test_unicode_in_grouping_column() -> TestResult {
+    run(
+        &["-c", "2", "tests/inputs/unicode-keys.csv"],
+        "tests/expected/unicode-keys.txt",
+    )
+}
+
+// Groups are ordered by UTF-8 bytes, because that is `BTreeMap<String, _>`'s
+// order: "Zürich" (0x5A…) before "äteam" (0xC3 0xA4…) before "東京" (0xE4…)
+// before "🎉 party" (0xF0…). Note the capital sorts first — this is byte order,
+// not a human or locale collation. It is the one ordering guarantee the output
+// makes, and swapping the map for a case-insensitive or natural-sort one would
+// break every fixture above without failing a single assertion in them.
+#[test]
+fn test_groups_are_ordered_by_utf8_bytes() -> TestResult {
+    let out = Command::cargo_bin("shelve")?.args(["-c", "2", "tests/inputs/unicode-keys.csv"]).output()?;
+    let stdout = String::from_utf8(out.stdout)?;
+    let headers: Vec<&str> = stdout.lines().filter_map(|line| line.strip_suffix(':')).collect();
+
+    assert_eq!(
+        headers,
+        vec!["Zürich", "äteam", "東京", "🎉 party"],
+        "group order changed"
+    );
+    Ok(())
+}
+
+// `shelve big.csv | head -1` is a normal way to use this program, and the
+// reader closing early is not a failure. Rust ignores SIGPIPE, so the write
+// surfaces as EPIPE and `main` maps it to a zero exit; without that, every
+// pipe into `head` or `less` would print an error nobody is left to read.
+//
+// Unix-only: Windows has no SIGPIPE and maps ERROR_BROKEN_PIPE differently, and
+// the timing below was not verified there.
+#[cfg(unix)]
+#[test]
+fn test_closed_stdout_exits_zero_without_an_error() -> TestResult {
+    use std::fmt::Write as _;
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    // The output has to exceed the 64 KiB pipe buffer. `shelve` reads all of
+    // stdin before writing anything, so a small result would land in the buffer
+    // and the program would exit 0 without ever seeing the closed read end —
+    // the test would pass while asserting nothing.
+    let mut input = String::from("id,filler\n");
+    let filler = "x".repeat(80);
+    for row in 0..20_000 {
+        writeln!(input, "{row},{filler}").expect("writing to a String cannot fail");
+    }
+
+    // `std::process::Command` rather than `assert_cmd`'s: the assertion is about
+    // a closed pipe, so the test needs the live child, and `assert_cmd::Command`
+    // keeps `spawn` private in favour of its own collect-and-compare helpers.
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_shelve"))
+        .args(["-c", "1"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    // Feeding stdin before closing stdout cannot deadlock: the child drains it
+    // into memory and only starts writing once this returns.
+    child.stdin.take().expect("stdin was piped").write_all(input.as_bytes())?;
+
+    // Close the read end, which is what `| head -1` does after its first line.
+    drop(child.stdout.take());
+
+    let out = child.wait_with_output()?;
+    let stderr = String::from_utf8(out.stderr)?;
+    assert!(
+        out.status.success(),
+        "a closed stdout must exit 0, got {}: {stderr}",
+        out.status
+    );
+    assert!(
+        !stderr.contains("Error:"),
+        "a closed stdout is not an error, but stderr said: {stderr}"
+    );
+    Ok(())
+}
+
+// The other half of the same contract, and a different mechanism. With fd 1
+// closed outright — `shelve file.csv >&-` — there is no pipe and so no EPIPE:
+// Rust's runtime substitutes `/dev/null` for any standard descriptor that is
+// closed at startup, so every write succeeds into nowhere and the run is clean.
+//
+// Pinned because the outcome (exit 0, silent) is identical to the broken-pipe
+// case above while the cause is not, which makes it easy to "fix" one and
+// quietly break the other. Driven through `/bin/sh` because `Stdio` has no
+// variant for "closed", and a child that merely inherits or is handed
+// `/dev/null` would assert nothing.
+#[cfg(unix)]
+#[test]
+fn test_stdout_closed_entirely_exits_zero() -> TestResult {
+    // `sh -c <script> <argv0> <argv1> <argv2>` binds $0/$1/$2 to the trailing
+    // operands, so the program and its fixture stay data rather than being
+    // interpolated into the script text.
+    let out = std::process::Command::new("/bin/sh")
+        .args([
+            "-c",
+            "\"$1\" \"$2\" >&-",
+            "sh",
+            env!("CARGO_BIN_EXE_shelve"),
+            "tests/inputs/tasks.csv",
+        ])
+        .stderr(std::process::Stdio::piped())
+        .output()?;
+
+    let stderr = String::from_utf8(out.stderr)?;
+    assert!(
+        out.status.success(),
+        "a closed stdout must exit 0, got {}: {stderr}",
+        out.status
+    );
+    assert_eq!(stderr, "", "nothing may be printed to stderr");
+    Ok(())
+}

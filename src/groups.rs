@@ -226,91 +226,21 @@ impl GroupedData {
 
 #[cfg(test)]
 mod tests {
-    use std::alloc::{GlobalAlloc, Layout, System};
-    use std::fmt::Write as _;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Mutex, MutexGuard, PoisonError};
-
     use csv::StringRecord;
 
     use super::{ColumnNumber, GroupedData, Row};
+    use crate::testing::{build_csv, count_allocations, measurement_lock};
 
-    /// Counts allocations, so a test can assert on the *shape* of the work and
-    /// not only on its output. This is installed for the unit-test binary only;
-    /// the integration tests under `tests/` are a separate binary and are
-    /// unaffected.
-    struct CountingAllocator;
-
-    static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
-
-    unsafe impl GlobalAlloc for CountingAllocator {
-        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-            unsafe { System.alloc(layout) }
-        }
-
-        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-            unsafe { System.dealloc(ptr, layout) }
-        }
-    }
-
-    #[global_allocator]
-    static GLOBAL: CountingAllocator = CountingAllocator;
-
-    /// Serialises the allocation-sensitive tests.
+    /// Group `csv_text` by its first column, panicking on any parse failure.
     ///
-    /// `ALLOCATIONS` is one process-wide counter and `cargo test` runs tests on
-    /// several threads, so two counting tests overlapping corrupt both: each
-    /// sees the other's allocations, and one test's `store(0)` can land in the
-    /// middle of another's measurement and truncate it. See `measurement_lock`.
-    static MEASUREMENT: Mutex<()> = Mutex::new(());
-
-    /// Take exclusive ownership of the allocation counter for a whole test.
-    ///
-    /// Isolating only the measured region is not enough. `ALLOCATIONS` counts
-    /// every allocation in the process, so a neighbouring test building its CSV
-    /// fixture on another thread inflates this one's numbers just as surely as
-    /// a second measurement would. Bind the returned guard to a name at the top
-    /// of each allocation-sensitive test and hold it until the body finishes;
-    /// that is what makes the counts reproducible under `cargo test`'s default
-    /// parallelism.
-    ///
-    /// Poisoning is ignored on purpose: the lock guards a counter, not an
-    /// invariant, so a panic in one test must not wedge the rest of the suite.
-    fn measurement_lock() -> MutexGuard<'static, ()> {
-        MEASUREMENT.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// Run `f` and report how many allocations it made. Every measurement is a
-    /// fresh count, so callers never have to reason about what ran before.
-    ///
-    /// The enclosing test must hold `measurement_lock`.
-    fn count_allocations<R>(f: impl FnOnce() -> R) -> (R, usize) {
-        ALLOCATIONS.store(0, Ordering::SeqCst);
-        let value = f();
-        (value, ALLOCATIONS.load(Ordering::SeqCst))
-    }
-
+    /// `csv::Reader` treats the first record as a header and skips it, so the
+    /// fixtures from [`build_csv`] parse as one record fewer than they contain.
+    /// Every use here compares two such calls, so the lost record cancels out.
     fn parse(csv_text: &str) -> GroupedData {
         let mut rdr = csv::Reader::from_reader(csv_text.as_bytes());
         let mut groups = GroupedData::new("1".parse::<ColumnNumber>().expect("column 1 parses"));
         groups.process(&mut rdr).expect("in-memory CSV reads");
         groups
-    }
-
-    /// A `columns`-wide CSV with `rows` records. Column 1 is the grouping key
-    /// and only ever takes two values, so every width builds the same two
-    /// groups and the map cost is identical across the comparison.
-    fn build_csv(rows: usize, columns: usize) -> String {
-        let mut out = String::new();
-        for row in 0..rows {
-            write!(out, "g{}", row % 2).expect("writing to a String cannot fail");
-            for column in 1..columns {
-                write!(out, ",r{row}c{column}").expect("writing to a String cannot fail");
-            }
-            out.push('\n');
-        }
-        out
     }
 
     /// Parsing must not get more expensive per row as the input gets wider.
@@ -446,5 +376,76 @@ mod tests {
             "adding {ROWS} rows to 2 groups cost {allocations} allocations; only the 2 distinct \
              group names should allocate, not one per row"
         );
+    }
+
+    /// Print the exact counts that the budget tests above only bound.
+    ///
+    /// Those bounds are deliberately loose so they cannot flake on allocator
+    /// details, which also makes them unable to answer "what does this cost
+    /// now?". Getting the real number by tightening a bound until it panics,
+    /// reading the panic message, and putting the bound back is a three-step
+    /// dance that leaves the tree dirty if anything interrupts it. This measures
+    /// the same operations without touching a bound, and CI runs it on every
+    /// push, so the current numbers are already in the log of the latest run.
+    ///
+    /// Locally: `cargo test --bin shelve -- --ignored --nocapture`.
+    ///
+    /// Lines are `alloc op=<name> <inputs> total=<n>` so they can be grepped or
+    /// diffed between two revisions. It asserts nothing on purpose: a count that
+    /// merely moved is information, not a failure, and the bounded tests above
+    /// are what decides when a move is a regression.
+    #[test]
+    #[ignore = "diagnostic: reports exact allocation counts and bounds nothing; run with -- --ignored --nocapture"]
+    fn report_allocation_counts() {
+        const WIDE_ROWS: usize = 200;
+        const FEW: usize = 128;
+        const MANY: usize = 256;
+        const KEY_ROWS: usize = 256;
+
+        let _guard = measurement_lock();
+
+        // Fixtures built before the first measurement: the counts below are
+        // about parsing and printing, not about assembling the inputs.
+        let narrow = build_csv(WIDE_ROWS, 4);
+        let wide = build_csv(WIDE_ROWS, 64);
+        let few = build_csv(FEW, 4);
+        let many = build_csv(MANY, 4);
+
+        let (_, narrow_total) = count_allocations(|| parse(&narrow));
+        let (_, wide_total) = count_allocations(|| parse(&wide));
+        let (_, few_total) = count_allocations(|| parse(&few));
+        let (_, many_total) = count_allocations(|| parse(&many));
+
+        println!("alloc op=parse rows={WIDE_ROWS} cols=4 total={narrow_total}");
+        println!(
+            "alloc op=parse rows={WIDE_ROWS} cols=64 total={wide_total} width_delta={}",
+            wide_total.saturating_sub(narrow_total)
+        );
+        println!("alloc op=parse rows={FEW} cols=4 total={few_total}");
+        println!(
+            "alloc op=parse rows={MANY} cols=4 total={many_total} row_delta={} extra_rows={}",
+            many_total.saturating_sub(few_total),
+            MANY - FEW
+        );
+
+        let groups = parse("key,a,b,c\ng1,keep-a,keep-b,keep-c\ng1,keep-d,keep-e,keep-f\n");
+        let mut out: Vec<u8> = Vec::with_capacity(1 << 16);
+        let ((), print_total) = count_allocations(|| {
+            for (_, rows) in groups.groups() {
+                groups.write_rows(rows, &mut out).expect("writing to a Vec<u8> cannot fail");
+            }
+        });
+        println!("alloc op=write_rows rows=2 total={print_total}");
+
+        let keys: Vec<String> = (0..KEY_ROWS).map(|row| format!("g{}", row % 2)).collect();
+        let built: Vec<Row> = (0..KEY_ROWS).map(|_| Row::new(StringRecord::from(vec!["g0", "a", "b", "c"]))).collect();
+        let mut built = built.into_iter();
+        let mut grouped = GroupedData::new("1".parse::<ColumnNumber>().expect("column 1 parses"));
+        let ((), key_total) = count_allocations(|| {
+            for key in &keys {
+                grouped.group_rows(key).push(built.next().expect("one row per key"));
+            }
+        });
+        println!("alloc op=group_rows rows={KEY_ROWS} groups=2 total={key_total}");
     }
 }

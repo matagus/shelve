@@ -1,5 +1,13 @@
 tests/inputs/*.csv text eol=lf
 tests/expected/*.txt text eol=lf
+tests/expected/golden/*.txt text eol=lf
+
+# Byte-exact fixtures: the bytes under test *are* the line endings and the
+# BOM, so normalising them on checkout would silently delete the case they
+# exist to cover. These rules must stay below the `eol=lf` ones above — for a
+# given path the last matching pattern in this file wins.
+tests/inputs/crlf.csv -text
+tests/inputs/utf8-bom.csv -text
 *.rs text eol=lf
 *.md text eol=lf
 Cargo.toml text eol=lf
