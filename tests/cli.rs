@@ -18,9 +18,11 @@ fn normalize_usage(text: &str) -> String {
 }
 
 // The predicate is handed the raw output bytes, hence the UTF-8 check inside.
+// Line endings are normalised too: without a `.gitattributes`, checkout gives
+// Windows runners CRLF fixtures where the program emits LF.
 fn output_matches(expected: String) -> impl Predicate<[u8]> {
     predicates::function::function(move |bytes: &[u8]| match std::str::from_utf8(bytes) {
-        Ok(text) => normalize_usage(text) == expected,
+        Ok(text) => normalize_usage(&text.replace("\r\n", "\n")) == expected.replace("\r\n", "\n"),
         Err(_) => false,
     })
     .fn_name("output_matches")
