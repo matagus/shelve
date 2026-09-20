@@ -3,7 +3,7 @@ use clap::Parser;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
-use crate::groups::{ColumnNumber, GroupedData};
+use shelve::{ColumnNumber, GroupedData};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
