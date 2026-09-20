@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use predicates::prelude::*;
 use std::fs;
 
 // Unix-only, for the non-UTF-8 filename tests below.
@@ -9,24 +10,33 @@ use std::os::unix::ffi::OsStringExt;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-// clap prints the invoked binary's name in its usage errors, so on Windows the
-// fixtures say `shelve.exe` while everywhere else they say `shelve`. Normalising
-// one side keeps a single set of expected files.
+// clap prints the invoked binary's name in its usage text, so on Windows the
+// program reports `shelve.exe` while the committed fixtures say `shelve`.
+// Normalising the *actual* output keeps one set of expected files.
 fn normalize_usage(text: &str) -> String {
     text.replace("shelve.exe", "shelve")
 }
 
+// The predicate is handed the raw output bytes, hence the UTF-8 check inside.
+fn output_matches(expected: String) -> impl Predicate<[u8]> {
+    predicates::function::function(move |bytes: &[u8]| match std::str::from_utf8(bytes) {
+        Ok(text) => normalize_usage(text) == expected,
+        Err(_) => false,
+    })
+    .fn_name("output_matches")
+}
+
 // --------------------------------------------------
 fn run(args: &[&str], expected_file: &str) -> TestResult {
-    let expected = normalize_usage(&fs::read_to_string(expected_file)?);
-    Command::cargo_bin("shelve")?.args(args).assert().success().stdout(expected);
+    let expected = fs::read_to_string(expected_file)?;
+    Command::cargo_bin("shelve")?.args(args).assert().success().stdout(output_matches(expected));
     Ok(())
 }
 
 fn run_reading_from_stdin(stdin_file: &str, args: &[&str], expected_file: &str) -> TestResult {
     let input = fs::read_to_string(stdin_file)?;
-    let expected = normalize_usage(&fs::read_to_string(expected_file)?);
-    Command::cargo_bin("shelve")?.args(args).write_stdin(input).assert().success().stdout(expected);
+    let expected = fs::read_to_string(expected_file)?;
+    Command::cargo_bin("shelve")?.args(args).write_stdin(input).assert().success().stdout(output_matches(expected));
     Ok(())
 }
 
@@ -116,8 +126,12 @@ fn test_read_from_stdin() -> TestResult {
 
 #[test]
 fn test_unexpected_argument() -> TestResult {
-    let expected = normalize_usage(&fs::read_to_string("tests/expected/unexpected-argument.txt")?);
-    Command::cargo_bin("shelve")?.args(["--foobar", "tests/inputs/tasks.csv"]).assert().failure().stderr(expected);
+    let expected = fs::read_to_string("tests/expected/unexpected-argument.txt")?;
+    Command::cargo_bin("shelve")?
+        .args(["--foobar", "tests/inputs/tasks.csv"])
+        .assert()
+        .failure()
+        .stderr(output_matches(expected));
     Ok(())
 }
 
@@ -185,8 +199,9 @@ fn test_missing_file_is_named_in_error() -> TestResult {
 
 // The report keeps its whole source chain: the context says which file failed
 // and the cause says why. Printing only the outermost error would drop one of
-// the two halves. The OS message is asserted loosely ("No such file") because
-// Windows words the same condition differently.
+// the two halves. The OS message is matched loosely ("file specified" on
+// Windows, "No such file or directory" on Unix), so assert the shared os error
+// code plus both halves of the wrapped message.
 #[test]
 fn test_missing_file_error_includes_cause() -> TestResult {
     Command::cargo_bin("shelve")?
@@ -195,7 +210,7 @@ fn test_missing_file_error_includes_cause() -> TestResult {
         .failure()
         .code(1)
         .stderr(predicates::str::contains("cannot open"))
-        .stderr(predicates::str::contains("No such file"));
+        .stderr(predicates::str::contains("os error 2"));
     Ok(())
 }
 
