@@ -158,11 +158,29 @@ _expect=$(LC_ALL=C "$NEW_BIN" -c 1 "$WT/tests/inputs/unicode-keys.csv" 2>/dev/nu
   sed -n 's/:$//p' | LC_ALL=C sort | tr '\n' ',')
 _actual=$(LC_ALL=C "$NEW_BIN" -c 1 "$WT/tests/inputs/unicode-keys.csv" 2>/dev/null |
   sed -n 's/:$//p' | tr '\n' ',')
-if [ -n "$_actual" ] && [ "$_actual" = "$_expect" ]; then
-  pass group_order_is_byte_order
-  log "  group order: $_actual"
+# Missing fixture or unparseable output is reported as SKIP, not FAIL: a refactor
+# branch legitimately may predate tests/inputs/unicode-keys.csv, and failing the
+# smoke gate over an absent fixture would push the agent to invent one. But it is
+# never silently a PASS — without this guard a missing file yields empty stdout on
+# both sides, "empty == empty" satisfies the comparison, and the vacuous result is
+# indistinguishable from a real one. That is exactly what happened against a base
+# predating the fixture.
+if [ ! -f "$WT/tests/inputs/unicode-keys.csv" ]; then
+  printf 'group_order_is_byte_order:SKIP reason=fixture-missing\n'
+elif [ -z "$_actual" ]; then
+  fail group_order_is_byte_order "reason=no-group-headers-parsed"
 else
-  fail group_order_is_byte_order "got=[$_actual] expected-byte-order=[$_expect]"
+  # Two keys minimum: with one group there is no order to verify, and the
+  # assertion would pass for any implementation that emitted a single header.
+  _group_count=$(printf '%s' "$_actual" | tr ',' '\n' | grep -c . || true)
+  if [ "${_group_count:-0}" -lt 2 ]; then
+    fail group_order_is_byte_order "reason=fewer-than-two-groups count=$_group_count"
+  elif [ "$_actual" = "$_expect" ]; then
+    pass group_order_is_byte_order
+    log "  group order: $_actual"
+  else
+    fail group_order_is_byte_order "got=[$_actual] expected-byte-order=[$_expect]"
+  fi
 fi
 
 # --- 3. BASE <-> NEW differential -------------------------------------------
