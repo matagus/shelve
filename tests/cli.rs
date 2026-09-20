@@ -9,16 +9,23 @@ use std::os::unix::ffi::OsStringExt;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+// clap prints the invoked binary's name in its usage errors, so on Windows the
+// fixtures say `shelve.exe` while everywhere else they say `shelve`. Normalising
+// one side keeps a single set of expected files.
+fn normalize_usage(text: &str) -> String {
+    text.replace("shelve.exe", "shelve")
+}
+
 // --------------------------------------------------
 fn run(args: &[&str], expected_file: &str) -> TestResult {
-    let expected = fs::read_to_string(expected_file)?;
+    let expected = normalize_usage(&fs::read_to_string(expected_file)?);
     Command::cargo_bin("shelve")?.args(args).assert().success().stdout(expected);
     Ok(())
 }
 
 fn run_reading_from_stdin(stdin_file: &str, args: &[&str], expected_file: &str) -> TestResult {
     let input = fs::read_to_string(stdin_file)?;
-    let expected = fs::read_to_string(expected_file)?;
+    let expected = normalize_usage(&fs::read_to_string(expected_file)?);
     Command::cargo_bin("shelve")?.args(args).write_stdin(input).assert().success().stdout(expected);
     Ok(())
 }
@@ -109,7 +116,7 @@ fn test_read_from_stdin() -> TestResult {
 
 #[test]
 fn test_unexpected_argument() -> TestResult {
-    let expected = fs::read_to_string("tests/expected/unexpected-argument.txt")?;
+    let expected = normalize_usage(&fs::read_to_string("tests/expected/unexpected-argument.txt")?);
     Command::cargo_bin("shelve")?.args(["--foobar", "tests/inputs/tasks.csv"]).assert().failure().stderr(expected);
     Ok(())
 }
@@ -178,7 +185,8 @@ fn test_missing_file_is_named_in_error() -> TestResult {
 
 // The report keeps its whole source chain: the context says which file failed
 // and the cause says why. Printing only the outermost error would drop one of
-// the two halves.
+// the two halves. The OS message is asserted loosely ("No such file") because
+// Windows words the same condition differently.
 #[test]
 fn test_missing_file_error_includes_cause() -> TestResult {
     Command::cargo_bin("shelve")?
@@ -187,7 +195,7 @@ fn test_missing_file_error_includes_cause() -> TestResult {
         .failure()
         .code(1)
         .stderr(predicates::str::contains("cannot open"))
-        .stderr(predicates::str::contains("No such file or directory"));
+        .stderr(predicates::str::contains("No such file"));
     Ok(())
 }
 
@@ -216,8 +224,7 @@ fn test_non_utf8_filename_is_named_in_error() -> TestResult {
         .assert()
         .failure()
         .code(1)
-        .stderr(predicates::str::contains("cannot open"))
-        .stderr(predicates::str::contains("No such file or directory"));
+        .stderr(predicates::str::contains("cannot open 'tests/inputs/no-such-"));
     Ok(())
 }
 
