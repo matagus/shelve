@@ -1,7 +1,15 @@
-indent_style = "Block"
+# Stable-only options.
+#
+# `indent_style = "Block"` and `reorder_impl_items = true` were previously set
+# here and are nightly-only: every stable `cargo fmt` run — locally and in CI,
+# which pins `dtolnay/rust-toolchain@stable` — printed
+# "Warning: can't set ..., unstable features are only available in nightly
+# channel" and then ignored them. The committed formatting has therefore always
+# been stable's, so dropping the two options changes no file; it only removes
+# standing noise from the format gate. Do not re-add them without also moving
+# CI to nightly, or they will be dead config that warns on every run.
 reorder_imports = true
 reorder_modules = true
-reorder_impl_items = true
 max_width = 120
 chain_width = 120
 attr_fn_like_width = 100

@@ -1,0 +1,17 @@
+Zürich:
+
+1, open
+4, closed
+
+äteam:
+
+5, open
+
+東京:
+
+2, open
+
+🎉 party:
+
+3, closed
+
