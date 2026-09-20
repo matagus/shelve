@@ -15,11 +15,15 @@ pub struct Cli {
     /// Column number to group by
     #[arg(short, long, default_value = "1")]
     pub column_number: ColumnNumber,
+
+    /// Treat the first record as data instead of a header row
+    #[arg(long)]
+    pub no_headers: bool,
 }
 
 impl Cli {
     pub fn run(&self) -> Result<()> {
-        let groups: GroupedData = GroupedData::from_files(&self.filenames, self.column_number)?;
+        let groups: GroupedData = GroupedData::from_files(&self.filenames, self.column_number, self.no_headers)?;
 
         // Use a BufWriter to improve performance by reducing the number of write calls
         let stdout = io::stdout();
