@@ -6,6 +6,8 @@ A command-line tool written in Rust for pretty-printing CSV files grouped by a s
 [![Documentation](https://docs.rs/shelve/badge.svg)](https://docs.rs/shelve)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+![shelve demo](demo/shelve.gif)
+
 ## Installation
 
 ```bash
