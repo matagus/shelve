@@ -10,6 +10,15 @@ A command-line tool written in Rust for pretty-printing CSV files grouped by a s
 
 ## Installation
 
+### Homebrew (macOS)
+
+```bash
+brew tap matagus/tap
+brew install shelve
+```
+
+### Cargo
+
 ```bash
 cargo install shelve
 ```
