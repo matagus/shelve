@@ -17,6 +17,12 @@ brew tap matagus/tap
 brew install shelve
 ```
 
+The tap lives at [matagus/homebrew-tap](https://github.com/matagus/homebrew-tap).
+Its formula is bumped automatically whenever a release is published here, so
+`brew install shelve` tracks the latest version without manual maintenance. To
+build from `main` instead of a tagged release, use
+`brew install --HEAD matagus/tap/shelve`.
+
 ### Cargo
 
 ```bash

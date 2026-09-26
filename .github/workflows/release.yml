@@ -73,3 +73,23 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" --generate-notes --latest --title "$GITHUB_REF_NAME"
+
+      # Tell matagus/homebrew-tap a new version exists so it can bump its
+      # formula (url + sha256) and open/merge the PR itself. Non-fatal: a
+      # missing dispatch permission must not fail an otherwise good release,
+      # and the tap can always be bumped manually via workflow_dispatch.
+      - name: Notify Homebrew tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN secret not set; skipping tap notification"
+            exit 0
+          fi
+          if ! gh api repos/matagus/homebrew-tap/dispatches \
+                 -X POST \
+                 -f event_type=release \
+                 -f client_payload[version]="${GITHUB_REF_NAME#v}"; then
+            echo "::warning::could not notify matagus/homebrew-tap; bump the formula manually"
+          fi
