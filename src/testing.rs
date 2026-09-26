@@ -67,6 +67,16 @@ pub(crate) fn measurement_lock() -> MutexGuard<'static, ()> {
 /// fresh count, so callers never have to reason about what ran before.
 ///
 /// The enclosing test must hold [`measurement_lock`].
+///
+/// CAVEAT — the count is not hermetic. `ALLOCATIONS` is process-wide, so any
+/// allocation made by a thread this lock does not cover (the Rust runtime's
+/// one-time lazy startup: allocator arenas, thread-infrastructure on macOS)
+/// lands in the measurement if it happens concurrently. Absolute counts are
+/// therefore only assertable at *loose* bounds, or after an identical warm-up
+/// pass has retired the one-time noise — see `printing_rows_does_not_allocate`
+/// in `groups.rs` and issue #97 for the release failure that proved it.
+/// Deltas between two runs of identical workloads remain safe because the
+/// foreign term cancels.
 pub(crate) fn count_allocations<R>(f: impl FnOnce() -> R) -> (R, usize) {
     ALLOCATIONS.store(0, Ordering::SeqCst);
     let value = f();
