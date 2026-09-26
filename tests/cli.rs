@@ -1,5 +1,6 @@
-use assert_cmd::Command;
-use predicates::prelude::*;
+mod common;
+
+use common::{TestResult, output_matches, run_ok, run_ok_stdin};
 use std::fs;
 
 // Unix-only, for the non-UTF-8 filename tests below.
@@ -8,50 +9,16 @@ use std::ffi::OsString;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
 
-type TestResult = Result<(), Box<dyn std::error::Error>>;
-
-// clap prints the invoked binary's name in its usage text, so on Windows the
-// program reports `shelve.exe` while the committed fixtures say `shelve`.
-// Normalising the *actual* output keeps one set of expected files.
-fn normalize_usage(text: &str) -> String {
-    text.replace("shelve.exe", "shelve")
-}
-
-// The predicate is handed the raw output bytes, hence the UTF-8 check inside.
-// Line endings are normalised too: without a `.gitattributes`, checkout gives
-// Windows runners CRLF fixtures where the program emits LF.
-fn output_matches(expected: String) -> impl Predicate<[u8]> {
-    predicates::function::function(move |bytes: &[u8]| match std::str::from_utf8(bytes) {
-        Ok(text) => normalize_usage(&text.replace("\r\n", "\n")) == expected.replace("\r\n", "\n"),
-        Err(_) => false,
-    })
-    .fn_name("output_matches")
-}
-
-// --------------------------------------------------
-fn run(args: &[&str], expected_file: &str) -> TestResult {
-    let expected = fs::read_to_string(expected_file)?;
-    Command::cargo_bin("shelve")?.args(args).assert().success().stdout(output_matches(expected));
-    Ok(())
-}
-
-fn run_reading_from_stdin(stdin_file: &str, args: &[&str], expected_file: &str) -> TestResult {
-    let input = fs::read_to_string(stdin_file)?;
-    let expected = fs::read_to_string(expected_file)?;
-    Command::cargo_bin("shelve")?.args(args).write_stdin(input).assert().success().stdout(output_matches(expected));
-    Ok(())
-}
-
 //---------------------------------------------------
 #[test]
 fn test_help() -> TestResult {
-    run(&["--help"], "tests/expected/help.txt")
+    run_ok(&["--help"], "tests/expected/help.txt")
 }
 
 #[test]
 fn test_version() -> TestResult {
     let expected = format!("shelve {}\n", env!("CARGO_PKG_VERSION"));
-    Command::cargo_bin("shelve")?.arg("--version").assert().success().stdout(expected);
+    common::bin()?.arg("--version").assert().success().stdout(expected);
     Ok(())
 }
 
@@ -59,7 +26,7 @@ fn test_version() -> TestResult {
 // while parsing: a usage error with exit code 2, not a runtime `Error:` with 1.
 #[test]
 fn test_zero_column() -> TestResult {
-    Command::cargo_bin("shelve")?
+    common::bin()?
         .args(["-c", "0", "tests/inputs/tasks.csv"])
         .assert()
         .failure()
@@ -73,7 +40,7 @@ fn test_zero_column() -> TestResult {
 #[test]
 fn test_column_beyond_u8_range() -> TestResult {
     let input = fs::read_to_string("tests/inputs/tasks.csv")?;
-    Command::cargo_bin("shelve")?
+    common::bin()?
         .args(["-c", "256"])
         .write_stdin(input)
         .assert()
@@ -85,37 +52,37 @@ fn test_column_beyond_u8_range() -> TestResult {
 
 #[test]
 fn test_default_column() -> TestResult {
-    run(&["tests/inputs/tasks.csv"], "tests/expected/default-column.txt")
+    run_ok(&["tests/inputs/tasks.csv"], "tests/expected/default-column.txt")
 }
 
 #[test]
 fn test_first_column() -> TestResult {
-    run(&["-c", "1", "tests/inputs/tasks.csv"], "tests/expected/column-1.txt")
+    run_ok(&["-c", "1", "tests/inputs/tasks.csv"], "tests/expected/column-1.txt")
 }
 
 #[test]
 fn test_2nd_column() -> TestResult {
-    run(&["-c", "2", "tests/inputs/tasks.csv"], "tests/expected/column-2.txt")
+    run_ok(&["-c", "2", "tests/inputs/tasks.csv"], "tests/expected/column-2.txt")
 }
 
 #[test]
 fn test_3rd_column() -> TestResult {
-    run(&["-c", "3", "tests/inputs/tasks.csv"], "tests/expected/column-3.txt")
+    run_ok(&["-c", "3", "tests/inputs/tasks.csv"], "tests/expected/column-3.txt")
 }
 
 #[test]
 fn test_4th_column() -> TestResult {
-    run(&["-c", "4", "tests/inputs/tasks.csv"], "tests/expected/column-4.txt")
+    run_ok(&["-c", "4", "tests/inputs/tasks.csv"], "tests/expected/column-4.txt")
 }
 
 #[test]
 fn test_5th_column() -> TestResult {
-    run(&["-c", "5", "tests/inputs/tasks.csv"], "tests/expected/column-5.txt")
+    run_ok(&["-c", "5", "tests/inputs/tasks.csv"], "tests/expected/column-5.txt")
 }
 
 #[test]
 fn test_tw0_files() -> TestResult {
-    run(
+    run_ok(
         &["-c", "5", "tests/inputs/tasks.csv", "tests/inputs/more-tasks.csv"],
         "tests/expected/two-files.txt",
     )
@@ -123,17 +90,13 @@ fn test_tw0_files() -> TestResult {
 
 #[test]
 fn test_read_from_stdin() -> TestResult {
-    run_reading_from_stdin("tests/inputs/tasks.csv", &["-c", "5"], "tests/expected/stdin.txt")
+    run_ok_stdin("tests/inputs/tasks.csv", &["-c", "5"], "tests/expected/stdin.txt")
 }
 
 #[test]
 fn test_unexpected_argument() -> TestResult {
     let expected = fs::read_to_string("tests/expected/unexpected-argument.txt")?;
-    Command::cargo_bin("shelve")?
-        .args(["--foobar", "tests/inputs/tasks.csv"])
-        .assert()
-        .failure()
-        .stderr(output_matches(expected));
+    common::bin()?.args(["--foobar", "tests/inputs/tasks.csv"]).assert().failure().stderr(output_matches(expected));
     Ok(())
 }
 
@@ -141,14 +104,14 @@ fn test_unexpected_argument() -> TestResult {
 // a valid empty list, not an error about a missing argument.
 #[test]
 fn test_no_filename_arg_reads_stdin() -> TestResult {
-    run_reading_from_stdin("tests/inputs/empty.csv", &[], "tests/expected/empty.txt")
+    run_ok_stdin("tests/inputs/empty.csv", &[], "tests/expected/empty.txt")
 }
 
 // A column number that is not a number is rejected by the parser, so it never
 // reaches the grouping logic.
 #[test]
 fn test_non_integer_column_index() -> TestResult {
-    Command::cargo_bin("shelve")?
+    common::bin()?
         .args(["-c", "abc", "tests/inputs/tasks.csv"])
         .assert()
         .failure()
@@ -160,7 +123,7 @@ fn test_non_integer_column_index() -> TestResult {
 // test a case where -c option is higher than the number of columns
 #[test]
 fn test_too_high_column() -> TestResult {
-    run_reading_from_stdin("tests/inputs/tasks.csv", &["-c", "20"], "tests/expected/empty.txt")
+    run_ok_stdin("tests/inputs/tasks.csv", &["-c", "20"], "tests/expected/empty.txt")
 }
 
 // ...but it must not stay silent about it. Empty stdout plus a zero exit code
@@ -168,7 +131,7 @@ fn test_too_high_column() -> TestResult {
 #[test]
 fn test_too_high_column_warns_on_stderr() -> TestResult {
     let input = fs::read_to_string("tests/inputs/tasks.csv")?;
-    Command::cargo_bin("shelve")?
+    common::bin()?
         .args(["-c", "20"])
         .write_stdin(input)
         .assert()
@@ -181,7 +144,7 @@ fn test_too_high_column_warns_on_stderr() -> TestResult {
 #[test]
 fn test_too_high_column_warns_only_once() -> TestResult {
     let input = fs::read_to_string("tests/inputs/tasks.csv")?;
-    let output = Command::cargo_bin("shelve")?.args(["-c", "20"]).write_stdin(input).output()?;
+    let output = common::bin()?.args(["-c", "20"]).write_stdin(input).output()?;
     let warnings = String::from_utf8(output.stderr)?.matches("Warning:").count();
     assert_eq!(warnings, 1, "expected exactly one warning");
     Ok(())
@@ -191,7 +154,7 @@ fn test_too_high_column_warns_only_once() -> TestResult {
 // clue which argument could not be opened.
 #[test]
 fn test_missing_file_is_named_in_error() -> TestResult {
-    Command::cargo_bin("shelve")?
+    common::bin()?
         .arg("tests/inputs/no-such-file.csv")
         .assert()
         .failure()
@@ -206,7 +169,7 @@ fn test_missing_file_is_named_in_error() -> TestResult {
 // code plus both halves of the wrapped message.
 #[test]
 fn test_missing_file_error_includes_cause() -> TestResult {
-    Command::cargo_bin("shelve")?
+    common::bin()?
         .arg("tests/inputs/no-such-file.csv")
         .assert()
         .failure()
@@ -220,7 +183,7 @@ fn test_missing_file_error_includes_cause() -> TestResult {
 // tell which of several inputs was malformed.
 #[test]
 fn test_malformed_file_is_named_in_error() -> TestResult {
-    Command::cargo_bin("shelve")?
+    common::bin()?
         .arg("tests/inputs/malformed.csv")
         .assert()
         .failure()
@@ -236,7 +199,7 @@ fn test_malformed_file_is_named_in_error() -> TestResult {
 fn test_non_utf8_filename_is_named_in_error() -> TestResult {
     let path = OsString::from_vec(b"tests/inputs/no-such-\xff-file.csv".to_vec());
 
-    Command::cargo_bin("shelve")?
+    common::bin()?
         .arg(path)
         .assert()
         .failure()
@@ -267,7 +230,7 @@ fn test_non_utf8_filename_reads_committed_fixture() -> TestResult {
     }
 
     // Capture rather than assert directly, so the temp file is still removed on failure.
-    let out = Command::cargo_bin("shelve")?.arg(&path).output()?;
+    let out = common::bin()?.arg(&path).output()?;
     fs::remove_file(&path)?;
 
     assert!(
@@ -292,7 +255,7 @@ fn test_non_utf8_filename_reads_committed_fixture() -> TestResult {
 // must not collapse the layout.
 #[test]
 fn test_single_column_file_prints_headers_and_blank_rows() -> TestResult {
-    run(
+    run_ok(
         &["-c", "1", "tests/inputs/single-column.csv"],
         "tests/expected/single-column.txt",
     )
@@ -304,7 +267,7 @@ fn test_single_column_file_prints_headers_and_blank_rows() -> TestResult {
 // silently split.
 #[test]
 fn test_non_adjacent_duplicate_keys_group_together() -> TestResult {
-    run(
+    run_ok(
         &["-c", "3", "tests/inputs/duplicate-keys.csv"],
         "tests/expected/duplicate-keys.txt",
     )
@@ -315,7 +278,7 @@ fn test_non_adjacent_duplicate_keys_group_together() -> TestResult {
 // a stray carriage return is invisible in a terminal and corrupts a redirect.
 #[test]
 fn test_crlf_input_leaves_no_carriage_return_in_output() -> TestResult {
-    let out = Command::cargo_bin("shelve")?.args(["-c", "3", "tests/inputs/crlf.csv"]).output()?;
+    let out = common::bin()?.args(["-c", "3", "tests/inputs/crlf.csv"]).output()?;
     assert!(out.status.success(), "shelve exited with {}", out.status);
 
     let stdout = String::from_utf8(out.stdout)?;
@@ -335,7 +298,7 @@ fn test_crlf_input_leaves_no_carriage_return_in_output() -> TestResult {
 // the same file without the BOM, which is exactly what this compares against.
 #[test]
 fn test_utf8_bom_does_not_shift_columns_or_leak() -> TestResult {
-    run(&["tests/inputs/utf8-bom.csv"], "tests/expected/default-column.txt")
+    run_ok(&["tests/inputs/utf8-bom.csv"], "tests/expected/default-column.txt")
 }
 
 // A header with no records is an empty list, not an error — and not a warning
@@ -344,7 +307,7 @@ fn test_utf8_bom_does_not_shift_columns_or_leak() -> TestResult {
 // warning here would be indistinguishable from real data loss.
 #[test]
 fn test_header_only_file_is_empty_not_an_error() -> TestResult {
-    Command::cargo_bin("shelve")?.arg("tests/inputs/header-only.csv").assert().success().stdout("").stderr("");
+    common::bin()?.arg("tests/inputs/header-only.csv").assert().success().stdout("").stderr("");
     Ok(())
 }
 
@@ -353,13 +316,13 @@ fn test_header_only_file_is_empty_not_an_error() -> TestResult {
 // at 32 columns a leading, trailing or doubled ", " is unmissable.
 #[test]
 fn test_very_wide_row() -> TestResult {
-    run(&["-c", "1", "tests/inputs/wide-row.csv"], "tests/expected/wide-row.txt")
+    run_ok(&["-c", "1", "tests/inputs/wide-row.csv"], "tests/expected/wide-row.txt")
 }
 
 // Non-ASCII keys have to survive both as map keys and as printed group names.
 #[test]
 fn test_unicode_in_grouping_column() -> TestResult {
-    run(
+    run_ok(
         &["-c", "2", "tests/inputs/unicode-keys.csv"],
         "tests/expected/unicode-keys.txt",
     )
@@ -373,7 +336,7 @@ fn test_unicode_in_grouping_column() -> TestResult {
 // break every fixture above without failing a single assertion in them.
 #[test]
 fn test_groups_are_ordered_by_utf8_bytes() -> TestResult {
-    let out = Command::cargo_bin("shelve")?.args(["-c", "2", "tests/inputs/unicode-keys.csv"]).output()?;
+    let out = common::bin()?.args(["-c", "2", "tests/inputs/unicode-keys.csv"]).output()?;
     let stdout = String::from_utf8(out.stdout)?;
     let headers: Vec<&str> = stdout.lines().filter_map(|line| line.strip_suffix(':')).collect();
 
@@ -481,7 +444,7 @@ fn test_stdout_closed_entirely_exits_zero() -> TestResult {
 /// This is the acceptance test for issue #17: `-d` / `--delimiter`.
 #[test]
 fn test_custom_delimiter_tab() -> TestResult {
-    run(
+    run_ok(
         &["-d", "\t", "-c", "1", "tests/inputs/tasks.tsv"],
         "tests/expected/delimiter-tsv.txt",
     )
