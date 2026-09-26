@@ -23,14 +23,12 @@
 //! Always read that diff. Blessing without reading turns this file from a guard
 //! into a transcription of whatever the binary happens to do.
 
+mod common;
+
+use common::TestResult;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
-type TestError = Box<dyn std::error::Error>;
-
-/// `T` defaults to `()` so the test bodies read like the ones in `tests/cli.rs`.
-type TestResult<T = ()> = Result<T, TestError>;
 
 const INPUTS: &str = "tests/inputs";
 const GOLDENS: &str = "tests/expected/golden";
