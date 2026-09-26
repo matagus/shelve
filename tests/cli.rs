@@ -511,3 +511,39 @@ fn test_no_headers_treats_first_record_as_data() -> TestResult {
 
     Ok(())
 }
+
+/// A quoted CSV field containing an embedded newline must not corrupt the
+/// group header. The header line is the structural delimiter of the grouped
+/// layout; a raw newline inside it creates a stray line that parsers mistake
+/// for a separate group. The fix renders embedded newlines as the two-character
+/// sequence `\n` inside headers only (row fields remain unescaped to preserve
+/// the zero-allocation print path).
+#[test]
+fn test_multiline_group_header_does_not_corrupt_layout() -> TestResult {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_shelve"))
+        .args(["-c", "2", "tests/inputs/multiline-field.csv"])
+        .output()?;
+
+    assert!(out.status.success(), "exited with {}", out.status);
+    let stdout = String::from_utf8(out.stdout)?;
+
+    // Every header line must end with exactly ":" followed by a newline.
+    // No header may contain a raw newline.
+    for line in stdout.lines() {
+        if let Some(name) = line.strip_suffix(':') {
+            assert!(!name.contains('\n'), "header line contains embedded newline: {line:?}");
+        }
+    }
+
+    // The two multiline keys must appear with \n rendered literally.
+    assert!(
+        stdout.contains("first\\nsecond:"),
+        "expected escaped header, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("another\\nmultiline:"),
+        "expected escaped header, got:\n{stdout}"
+    );
+
+    Ok(())
+}

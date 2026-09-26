@@ -208,6 +208,14 @@ Bob:
 Triage, 2
 ```
 
+## Known limitations
+
+**Embedded newlines in fields.** A quoted CSV field that contains a newline is
+written to stdout verbatim inside data rows. Group headers are the exception:
+any `\r\n`, `\r`, or `\n` inside a group key is rendered as the two-character
+escape `\n` so the header always occupies exactly one line and the structural
+delimiter between groups stays intact.
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.

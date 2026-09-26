@@ -1,0 +1,12 @@
+another\nmultiline:
+
+3, again
+
+first\nsecond:
+
+1, hello
+
+single:
+
+2, world
+
