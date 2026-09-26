@@ -520,6 +520,13 @@ mod tests {
     /// callers can inspect the rows that [`GroupedData::groups`] returns.
     #[test]
     fn row_fields_exposes_all_columns_in_order() {
+        // Holds the measurement lock even though it asserts nothing about
+        // counts: `collect()` allocates, and `count_allocations` measures a
+        // process-wide counter. The zero-allocation printing budget only stays
+        // exact because every allocating test serialises behind this lock —
+        // an unlocked allocator here would race into that measurement.
+        let _guard = measurement_lock();
+
         let row = Row::new(StringRecord::from(vec!["a", "b", "c"]));
         let fields: Vec<&str> = row.fields().collect();
         assert_eq!(fields, vec!["a", "b", "c"]);
