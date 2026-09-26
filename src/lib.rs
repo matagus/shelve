@@ -11,7 +11,7 @@
 //! [`ColumnNumber`] newtype wraps [`NonZeroUsize`](std::num::NonZeroUsize) so
 //! that column zero is unrepresentable at the type level.
 
-#![warn(missing_docs)]
+#![deny(missing_docs)]
 
 mod groups;
 #[cfg(test)]

@@ -29,6 +29,12 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
 
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@cargo-deny
+
+      - name: Supply-chain check
+        run: cargo deny check
+
       - name: Check formatting
         run: cargo fmt --all --check
 

@@ -30,6 +30,12 @@ jobs:
 
       # Lint before building: both gates are cheap to satisfy and should fail the
       # run fast, instead of surfacing only after the whole test suite.
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@cargo-deny
+
+      - name: Supply-chain check
+        run: cargo deny check
+
       - name: Check formatting
         run: cargo fmt --all --check
 

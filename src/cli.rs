@@ -5,6 +5,15 @@ use std::path::PathBuf;
 
 use shelve::{ColumnNumber, GroupedData};
 
+/// Characters that collide with CSV syntax and must not be accepted as a
+/// field delimiter.
+///
+/// The quote character is the most dangerous: using it as the delimiter
+/// silently produces garbage because the parser treats every field boundary
+/// as a quoted-field toggle. Newlines break record framing, and whitespace
+/// delimiters are ambiguous in most real-world CSVs.
+const FORBIDDEN_DELIMITERS: &[char] = &['"', '\r', '\n'];
+
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 pub struct Cli {
@@ -21,8 +30,26 @@ pub struct Cli {
     pub no_headers: bool,
 
     /// Field delimiter character (default: ',')
-    #[arg(short, long, default_value = ",")]
+    #[arg(short, long, default_value = ",", value_parser = parse_delimiter)]
     pub delimiter: char,
+}
+
+/// Reject delimiter characters that collide with CSV syntax.
+///
+/// Returning a `String` error makes clap print it as a usage error (exit 2),
+/// matching how column zero is already rejected at parse time via
+/// [`ColumnNumber`].
+fn parse_delimiter(s: &str) -> std::result::Result<char, String> {
+    let ch = s.chars().next().ok_or_else(|| "delimiter must be a single character".to_owned())?;
+    if s.len() != ch.len_utf8() {
+        return Err("delimiter must be a single character".to_owned());
+    }
+    if FORBIDDEN_DELIMITERS.contains(&ch) {
+        return Err(format!(
+            "'{ch}' is not a valid delimiter: it collides with CSV syntax (quote or newline)"
+        ));
+    }
+    Ok(ch)
 }
 
 impl Cli {
