@@ -350,10 +350,23 @@ if selected alloc; then
   # the exact counts those budgets only bound. Both come straight from ci.yaml,
   # so this stays aligned with whatever the alloc tests are renamed to.
   _cmd=$(ci_step_command 'Allocation budget')
-  [ -n "$_cmd" ] || _cmd='cargo test --release --bin shelve -- allocat --nocapture'
+  [ -n "$_cmd" ] || _cmd='cargo test --release --lib -- allocat --nocapture'
   _rep=$(ci_step_command 'Allocation report')
-  [ -n "$_rep" ] || _rep='cargo test --release --bin shelve -- --ignored --nocapture'
-  if run_ci_step alloc "$_cmd"; then :; else FAILED="$FAILED alloc"; fi
+  [ -n "$_rep" ] || _rep='cargo test --release --lib -- --ignored --nocapture'
+  _budget_log=/tmp/shelve-gate-alloc-budget.log
+  if (cd "$WT" && sh -c "$_cmd") >"$_budget_log" 2>&1; then
+    _budget_passed=$(grep -oE '[0-9]+ passed' "$_budget_log" | head -1 | grep -oE '^[0-9]+' || true)
+    if [ "${_budget_passed:-0}" -gt 0 ]; then
+      printf 'step=alloc_budget:ok passed=%s\n' "$_budget_passed"
+    else
+      printf 'step=alloc_budget:FAIL reason=zero-tests-matched\n'
+      log "  alloc budget step ran zero tests — the filter may be stale or the target wrong."
+      FAILED="$FAILED alloc"
+    fi
+  else
+    printf 'step=alloc_budget:FAIL exit=%s\n' $?
+    FAILED="$FAILED alloc"
+  fi
   # Informational only: the reporter asserts nothing, so a non-zero exit there is
   # a note, not a gate failure. Reported rather than swallowed.
   #

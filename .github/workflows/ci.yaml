@@ -58,7 +58,7 @@ jobs:
       # costs nothing and rules out the difference. The filter matches all four
       # budget tests by name.
       - name: Allocation budget
-        run: cargo test --release --bin shelve -- allocat --nocapture
+        run: cargo test --release --lib -- allocat --nocapture
 
       # Prints the exact counts those budgets only bound, in a greppable
       # `alloc op=... total=N` form. The test is `#[ignore]`d and asserts
@@ -66,4 +66,4 @@ jobs:
       # numbers are already in the log of the latest run when a performance
       # issue is triaged, instead of having to be re-derived locally.
       - name: Allocation report
-        run: cargo test --release --bin shelve -- --ignored --nocapture
+        run: cargo test --release --lib -- --ignored --nocapture
