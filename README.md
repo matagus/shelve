@@ -208,6 +208,11 @@ Bob:
 Triage, 2
 ```
 
+## Memory usage
+
+shelve reads the entire input into memory before printing. Expect peak RSS
+around 6× file size — inherent to grouping every record into a sorted map.
+
 ## Known limitations
 
 **Embedded newlines in fields.** A quoted CSV field that contains a newline is

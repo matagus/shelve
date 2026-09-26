@@ -57,6 +57,16 @@ impl Row {
         Row { data }
     }
 
+    /// Iterate over this row's fields in column order.
+    ///
+    /// Without this, [`GroupedData::groups`] returns `(&str, &[Row])` slices
+    /// whose rows a downstream caller can construct and debug-print but never
+    /// inspect. The wrapper is intentionally thin — `StringRecord` already
+    /// owns its data and iterates as `&str`, so there is nothing to copy.
+    pub fn fields(&self) -> impl Iterator<Item = &str> {
+        self.data.iter()
+    }
+
     /// Write this row's fields to `out`, separated by `", "` and omitting the
     /// field at `skip`.
     ///
@@ -504,5 +514,21 @@ mod tests {
             }
         });
         println!("alloc op=group_rows rows={KEY_ROWS} groups=2 total={key_total}");
+    }
+
+    /// `Row::fields` must expose every field in column order so downstream
+    /// callers can inspect the rows that [`GroupedData::groups`] returns.
+    #[test]
+    fn row_fields_exposes_all_columns_in_order() {
+        // Holds the measurement lock even though it asserts nothing about
+        // counts: `collect()` allocates, and `count_allocations` measures a
+        // process-wide counter. The zero-allocation printing budget only stays
+        // exact because every allocating test serialises behind this lock —
+        // an unlocked allocator here would race into that measurement.
+        let _guard = measurement_lock();
+
+        let row = Row::new(StringRecord::from(vec!["a", "b", "c"]));
+        let fields: Vec<&str> = row.fields().collect();
+        assert_eq!(fields, vec!["a", "b", "c"]);
     }
 }

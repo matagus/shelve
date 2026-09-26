@@ -510,3 +510,18 @@ fn test_multiline_group_header_does_not_corrupt_layout() -> TestResult {
 
     Ok(())
 }
+
+/// Characters that collide with CSV syntax (quote, newline) must be rejected
+/// as a delimiter with a usage error, not silently accepted to produce garbage.
+/// This is the same design principle as column zero: reject bad input at parse
+/// time with exit code 2 rather than producing wrong output with exit code 0.
+#[test]
+fn test_quote_character_rejected_as_delimiter() -> TestResult {
+    common::bin()?
+        .args(["-d", "\"", "-c", "1", "tests/inputs/tasks.csv"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicates::str::contains("not a valid delimiter"));
+    Ok(())
+}
