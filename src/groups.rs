@@ -159,6 +159,10 @@ impl GroupedData {
         );
     }
 
+    fn build_reader<R: std::io::Read>(reader: R, has_headers: bool, delim: u8) -> csv::Reader<R> {
+        csv::ReaderBuilder::new().has_headers(has_headers).delimiter(delim).from_reader(reader)
+    }
+
     /// Read CSV files and group their records by the chosen column.
     ///
     /// When `filenames` is empty, stdin is read instead. Records are split on
@@ -179,7 +183,7 @@ impl GroupedData {
 
         if filenames.is_empty() {
             let stdin = std::io::stdin().lock();
-            let mut rdr = csv::ReaderBuilder::new().has_headers(has_headers).delimiter(delim).from_reader(stdin);
+            let mut rdr = Self::build_reader(stdin, has_headers, delim);
             groups.process(&mut rdr)?;
         } else {
             for filename in filenames {
@@ -191,7 +195,7 @@ impl GroupedData {
                 //
                 // `display()` because the name may not be UTF-8.
                 let file = File::open(filename).with_context(|| format!("cannot open '{}'", filename.display()))?;
-                let mut rdr = csv::ReaderBuilder::new().has_headers(has_headers).delimiter(delim).from_reader(file);
+                let mut rdr = Self::build_reader(file, has_headers, delim);
                 groups.process(&mut rdr).with_context(|| format!("cannot read '{}'", filename.display()))?;
             }
         }
