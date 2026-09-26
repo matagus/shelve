@@ -336,6 +336,21 @@ mod tests {
     /// fields into a `Vec<&str>` and joining them allocates on every printed
     /// line to produce exactly those bytes.
     ///
+    /// The budget is a *delta* between two identical print passes, not an
+    /// absolute zero. `ALLOCATIONS` counts every allocation in the process,
+    /// including those made by background threads the Rust runtime starts
+    /// lazily (one-time allocator and thread-infrastructure allocations that
+    /// land on other CPUs during the measured window). On macOS that noise
+    /// injects ~11 allocations often enough to fail a zero-tolerance absolute
+    /// assertion — the `v0.4.1` release failed exactly that way while the same
+    /// commit passed repeatedly nearby (issue #97).
+    ///
+    /// A warm-up pass over identical work makes the measurement race-free: it
+    /// guarantees the runtime's one-time startup has already happened, so the
+    /// second pass sees only what row formatting itself allocates. A `Vec<&str>`
+    /// join regression still fails deterministically on every platform, because
+    /// it allocates in the measured pass too.
+    ///
     /// The buffer is sized outside the measured region so the assertion is about
     /// formatting alone, and the expected text is spelled out so the test also
     /// pins the bytes: dropping the allocation must not change the output. The
@@ -348,15 +363,27 @@ mod tests {
         let groups = parse("key,a,b,c\ng1,keep-a,keep-b,keep-c\ng1,keep-d,keep-e,keep-f\n");
         let mut out: Vec<u8> = Vec::with_capacity(1 << 16);
 
-        let ((), allocations) = count_allocations(|| {
+        let print = |out: &mut Vec<u8>| {
             for (_, rows) in groups.groups() {
-                groups.write_rows(rows, &mut out).expect("writing to a Vec<u8> cannot fail");
+                groups.write_rows(rows, out).expect("writing to a Vec<u8> cannot fail");
             }
-        });
+        };
+
+        // Warm-up pass: executes every code path the budget measures, absorbs
+        // the runtime's lazy thread-startup allocations, and is deliberately
+        // unmeasured beyond reporting its count for diagnostics.
+        let ((), warmup) = count_allocations(|| print(&mut out));
+        out.clear();
+
+        // Measured pass: with the process fully warmed, row formatting must
+        // allocate nothing. This is the invariant that a `Vec<&str>` join
+        // regression violates deterministically, on every platform.
+        let ((), allocations) = count_allocations(|| print(&mut out));
 
         assert_eq!(
             allocations, 0,
-            "printing 2 rows cost {allocations} allocations; row formatting should write fields straight to the output"
+            "printing 2 rows cost {allocations} allocations after a warm-up pass (warm-up \
+             itself cost {warmup}); row formatting should write fields straight to the output"
         );
         assert_eq!(
             String::from_utf8(out).expect("rows are written as UTF-8"),
