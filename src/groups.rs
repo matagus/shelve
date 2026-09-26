@@ -97,10 +97,11 @@ pub struct GroupedData {
 }
 
 impl GroupedData {
+    /// Create an empty grouping keyed by `column_number`.
+    ///
     /// `column_number` is the 1-based number the CLI exposes. It is converted
     /// to a 0-based index exactly once, here, so no other code has to subtract
     /// one: the newtype cannot hold a zero, so the subtraction cannot underflow.
-    /// Create an empty grouping keyed by `column_number`.
     #[must_use]
     pub fn new(column_number: ColumnNumber) -> Self {
         GroupedData {
@@ -220,7 +221,6 @@ impl GroupedData {
     /// The groups in key order, borrowed straight from the map. Iterating
     /// this is all a caller needs: no key Vec to allocate and no per-group
     /// lookup afterwards.
-    /// The groups in key order, borrowed straight from the map.
     pub fn groups(&self) -> impl Iterator<Item = (&str, &[Row])> + '_ {
         self.groups.iter().map(|(name, rows)| (name.as_str(), rows.as_slice()))
     }
@@ -230,7 +230,6 @@ impl GroupedData {
     /// Formatting lives here rather than in a `Display` impl on [`Row`] because
     /// the index to omit is this struct's state: a row cannot name it on its own
     /// any more, and the caller should not have to thread it back in by hand.
-    /// Print `rows` one per line, without the grouping column.
     ///
     /// # Errors
     ///
@@ -247,7 +246,6 @@ impl GroupedData {
     ///
     /// Renders the full grouped layout: group header with colon, blank line,
     /// rows, trailing blank line, repeated for every group in key order.
-    /// Render the full grouped layout into any writable sink.
     ///
     /// # Errors
     ///
