@@ -67,3 +67,26 @@ jobs:
       # issue is triaged, instead of having to be re-derived locally.
       - name: Allocation report
         run: cargo test --release --lib -- --ignored --nocapture
+
+      # The README usage block is a verbatim copy of `shelve --help`. This
+      # step fails the build if they have drifted apart, so a flag change
+      # that forgets to update the README is caught before merge. Run
+      # `scripts/update-readme-help.sh` locally to regenerate.
+      # `shell: bash` because the step body is POSIX shell (command
+      # substitution, `[ ]`, process substitution, awk). The Windows runner
+      # default is PowerShell 7, which parses none of that; bash ships with
+      # Git on all three OS images, so one script covers the whole matrix.
+      - name: README help block
+        shell: bash
+        run: |
+          # clap derives the usage line from argv[0], so on Windows the
+          # binary prints `shelve.exe`; the README (and the help.txt golden)
+          # use the bare `shelve`. Strip the suffix before comparing.
+          ACTUAL="$(cargo run --quiet -- --help | sed 's/shelve\.exe/shelve/')"
+          EXTRACTED="$(awk '/^## Usage$/{u=1} u&&/^```text$/{p=1;next} p&&/^```$/{p=0;u=0;next} p' README.md)"
+          if [ "$ACTUAL" != "$EXTRACTED" ]; then
+            echo "::error::README usage block does not match \`shelve --help\`"
+            echo "Run scripts/update-readme-help.sh to regenerate."
+            diff <(echo "$EXTRACTED") <(echo "$ACTUAL") || true
+            exit 1
+          fi
