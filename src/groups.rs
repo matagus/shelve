@@ -252,7 +252,12 @@ impl GroupedData {
     /// Returns an I/O error if writing to `out` fails.
     pub fn write_to<W: Write>(&self, out: &mut W) -> io::Result<()> {
         for (group, rows) in self.groups() {
-            writeln!(out, "{group}:\n")?;
+            // A quoted CSV field may contain embedded newlines. Writing them
+            // verbatim into the header destroys the structural delimiter that
+            // separates groups from data. Render \r\n and \n as the two-character
+            // escape \\n so every header occupies exactly one line.
+            let safe = group.replace("\r\n", "\\n").replace(['\r', '\n'], "\\n");
+            writeln!(out, "{safe}:\n")?;
             self.write_rows(rows, out)?;
             writeln!(out)?;
         }
