@@ -25,19 +25,40 @@ cargo install shelve
 
 ## Usage
 
-```bash
-shelve --help
+```text
+A simple command-line tool to pretty print CSV files grouped by a column
 
-Usage: shelve [OPTIONS] [FILENAME]...
+Usage: shelve [OPTIONS] [FILENAMES]...
 
 Arguments:
-  FILENAME  CSV file to read [default: stdin]
+  [FILENAMES]...  
 
 Options:
-  -c, --column-number <COLUMN_NUMBER>  Column number to group by [default: 1]  (first colum)
+  -c, --column-number <COLUMN_NUMBER>  Column number to group by [default: 1]
+      --no-headers                     Treat the first record as data instead of a header row
+  -d, --delimiter <DELIMITER>          Field delimiter character (default: ',') [default: ,]
   -h, --help                           Print help
   -V, --version                        Print version
 ```
+
+> **Note:** This block is the verbatim output of `shelve --help`. A CI step
+> checks that it stays in sync with the binary; if you add or change a flag,
+> update both the code and this section (or run
+> `scripts/update-readme-help.sh` to regenerate it).
+
+### Strict rows
+
+By default `shelve` requires every row to have the same number of fields as
+the header. A short or long row aborts the entire run with exit 1 after the
+whole input has been read:
+
+```console
+$ printf 'id,a,b\n1,x,y\n2,z\n' | shelve -c 1
+Error: CSV error: record 2 (line: 3, byte: 13): found record with 2 fields, but the previous record has 3 fields
+```
+
+This catches malformed exports early. If your input has legitimate ragged
+rows, pre-process it to pad or truncate fields before piping to `shelve`.
 
 ## Examples
 
@@ -56,10 +77,10 @@ Task ID,Task Title,Status,Assignee,Priority
 8,Write tests for feature A,In Progress,John Doe,Low
 ```
 
-Grouping by the `Status` column (column number 2):
+Grouping by the `Status` column (column number 3):
 
 ```bash
-shelve -c 3 example.csv
+shelve -c 3 sample-files/tasks.csv
 
 Done:
 
@@ -79,10 +100,10 @@ To Do:
 7, Fix bug C, Alice Bar, High
 ```
 
-Grouping by the `Priority` column (column number 4):
+Grouping by the `Priority` column (column number 5):
 
 ```bash
-shelve -c 5 example.csv
+shelve -c 5 sample-files/tasks.csv
 
 High:
 
@@ -102,10 +123,10 @@ Medium:
 6, Write missing documentation for feature A, Done, Peter Foo
 ```
 
-Grouping by the `Assignee` column (column number 3):
+Grouping by the `Assignee` column (column number 4):
 
 ```bash
-shelve -c 4 example.csv
+shelve -c 4 sample-files/tasks.csv
 
 Alice Bar:
 
@@ -131,7 +152,7 @@ Peter Foo:
 The command can also read input from `stdin`:
 
 ```bash
->> cat sample-files/tasks.csv | shelve -c 5
+cat sample-files/tasks.csv | shelve -c 5
 
 High:
 
@@ -157,6 +178,35 @@ Or reading multiple files at once:
 shelve -c 5 sample-files/tasks.csv sample-files/more-tasks.csv
 ```
 
+### Treating the first row as data (`--no-headers`)
+
+If your file has no header row, pass `--no-headers` so the first line is
+grouped as data instead of being consumed as column names:
+
+```bash
+shelve --no-headers -c 1 sample-files/tasks.csv
+```
+
+### Tab-separated and other delimiters (`-d`)
+
+Use `-d` to change the field delimiter. For a TSV file:
+
+```bash
+shelve -d $'\t' -c 1 tests/inputs/tasks.tsv
+```
+
+Output:
+
+```text
+Alice:
+
+Deploy, 1
+Refactor, 3
+
+Bob:
+
+Triage, 2
+```
 
 ## Contributing
 
