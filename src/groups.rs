@@ -39,45 +39,62 @@ impl std::fmt::Display for ColumnNumber {
     }
 }
 
-/// A contiguous range of bytes inside the row arena.
+/// A single CSV record: where its field ranges live in the shared arrays.
 ///
-/// Rows are stored as byte slices in a single owned buffer (`arena`) rather
-/// than as individually heap-allocated `StringRecord`s. Each field is
-/// identified by its `(offset, len)` span within that buffer, so iterating
-/// fields requires no per-field allocation — only indexing into the shared
-/// byte slice.
+/// Instead of owning its data via a heap-allocated `csv::StringRecord`, a row
+/// is a small descriptor into three collection-wide arrays (`arena` for the
+/// field bytes, `bounds` for the boundaries). This removes the per-record
+/// allocation entirely.
+///
+/// The ranges are deliberately **flat and shared** rather than one
+/// `Vec<FieldRange>` per row. A per-row vector costs 24 B of header plus its
+/// own allocation with doubling slack; measured on the 1M-row / 12-column
+/// fixture that was 192 MB of range storage against 155 MB of actual payload,
+/// which turned the memory fix into a +23% peak-RSS regression at high key
+/// cardinality. Flat ranges cost exactly 8 B per field with no slack and no
+/// per-row allocator bookkeeping.
 #[derive(Debug, Clone, Copy)]
-struct FieldRange {
-    offset: usize,
-    len: usize,
-}
-
-/// A single CSV record, stored as field ranges into a shared byte arena.
-///
-/// Instead of owning its data via a heap-allocated `csv::StringRecord`, each
-/// row holds an array of `(offset, len)` spans pointing into the arena's
-/// single `Vec<u8>`. This eliminates the per-row heap allocation and the
-/// per-field `String` copies that `StringRecord` imposes.
-#[derive(Debug)]
 pub struct Row {
-    /// Spans for each field, in column order.
-    fields: Vec<FieldRange>,
+    /// Index of this row's first field in [`GroupedData`]'s range arrays.
+    start: u32,
+    /// Number of fields, which fixes the range span and therefore the column
+    /// index of every field in the record.
+    len: u32,
 }
 
 impl Row {
-    /// Construct a row from field byte slices, appending their contents into
-    /// `arena` and recording the resulting spans.
-    fn from_byte_slices(fields: &[&[u8]], arena: &mut Vec<u8>) -> Self {
-        let mut ranges = Vec::with_capacity(fields.len());
-        for field in fields {
-            let offset = arena.len();
-            arena.extend_from_slice(field);
-            ranges.push(FieldRange {
-                offset,
-                len: field.len(),
-            });
+    /// Append each field's bytes to `arena`, recording their boundaries in
+    /// `bounds`.
+    ///
+    /// The field at `skip` (the grouping column) records a zero-length range
+    /// and its bytes are **not** copied. Those bytes duplicate the group key
+    /// already interned once per distinct name, they are never printed, and at
+    /// high key cardinality keeping them amounts to a second full copy of the
+    /// most-repeated column.
+    ///
+    /// The slot is still recorded so every following field keeps its original
+    /// column index, which [`Row::write_to`] and [`Row::fields`] rely on.
+    fn ingest<'f>(
+        fields: impl ExactSizeIterator<Item = &'f [u8]>,
+        skip: usize,
+        arena: &mut Vec<u8>,
+        bounds: &mut Vec<u32>,
+    ) -> Self {
+        // One amortised reservation per row instead of one per field push: a
+        // `Vec` grown by 2N pushes still reallocates O(log) times, and each
+        // reallocation copies the whole array.
+        bounds.reserve(fields.len() * 2);
+        let start = u32::try_from(bounds.len()).expect("a record's range offsets fit in u32");
+        let count = u32::try_from(fields.len()).expect("a record's field count fits in u32");
+        for (index, field) in fields.enumerate() {
+            let begin = arena.len();
+            if index != skip {
+                arena.extend_from_slice(field);
+            }
+            bounds.push(u32::try_from(begin).expect("arena offset fits in u32"));
+            bounds.push(u32::try_from(arena.len() - begin).expect("one field's bytes fit in u32"));
         }
-        Row { fields: ranges }
+        Row { start, len: count }
     }
 
     /// Iterate over this row's fields in column order.
@@ -86,13 +103,24 @@ impl Row {
     /// allocation occurs. Fields are returned as `&str`; the arena is
     /// guaranteed to contain valid UTF-8 because it is populated from
     /// `csv::ByteRecord` fields that were validated at ingest time.
-    pub fn fields<'a>(&'a self, arena: &'a [u8]) -> impl Iterator<Item = &'a str> {
-        self.fields.iter().map(move |r| {
-            let start = r.offset;
-            let end = start + r.len;
-            // SAFETY: the arena is populated from csv::ByteRecord fields that
-            // are valid UTF-8 (validated during ingest via from_utf8).
-            unsafe { std::str::from_utf8_unchecked(&arena[start..end]) }
+    ///
+    /// The grouping column yields `""`: its bytes are deliberately not retained
+    /// (see [`Row::ingest`]), and callers that print rows omit that column.
+    pub fn fields<'a>(self, arena: &'a [u8], bounds: &'a [u32]) -> impl Iterator<Item = &'a str> {
+        // Indexed directly rather than via `chunks`: `Chunks::next` copies into
+        // an internal buffer, which allocates once per printed row and breaks
+        // the zero-allocation printing budget this path is held to.
+        let pairs = 0..self.len;
+        pairs.filter_map(move |index| {
+            let at = self.start as usize + index as usize * 2;
+            if at + 1 >= bounds.len() {
+                return None;
+            }
+            let begin = bounds[at] as usize;
+            let end = begin + bounds[at + 1] as usize;
+            // SAFETY: every recorded span is a whole field of a ByteRecord
+            // whose UTF-8 validity was checked at ingest.
+            Some(unsafe { std::str::from_utf8_unchecked(&arena[begin..end]) })
         })
     }
 
@@ -107,10 +135,12 @@ impl Row {
     /// Each kept field goes straight to the writer. Collecting them into a
     /// `Vec<&str>` and joining the result would allocate twice per printed line
     /// to produce exactly these bytes.
-    fn write_to(&self, out: &mut impl Write, skip: usize, arena: &[u8]) -> io::Result<()> {
+    fn write_to(self, out: &mut impl Write, skip: usize, arena: &[u8], bounds: &[u32]) -> io::Result<()> {
         let mut first = true;
 
-        for (index, range) in self.fields.iter().enumerate() {
+        // Written by index, not by iterator: any intermediate allocation here
+        // would show up in the printing budget that guards this function.
+        for index in 0..self.len as usize {
             if index == skip {
                 continue;
             }
@@ -119,9 +149,9 @@ impl Row {
             } else {
                 write!(out, ", ")?;
             }
-            let start = range.offset;
-            let end = start + range.len;
-            out.write_all(&arena[start..end])?;
+            let at = self.start as usize + index * 2;
+            let begin = bounds[at] as usize;
+            out.write_all(&arena[begin..begin + bounds[at + 1] as usize])?;
         }
 
         writeln!(out)
@@ -147,10 +177,13 @@ pub struct GroupedData {
     /// Reverse lookup for output: id → name. Built lazily or maintained
     /// alongside `intern`; used during `write_to` to recover the group name.
     names: Vec<String>,
-    /// Byte arena holding all row field data. Every `Row`'s `FieldRange`
-    /// offsets point into this buffer. One allocation for the entire dataset
-    /// replaces one allocation per `StringRecord`.
+    /// Byte arena holding every retained field of every row. One allocation
+    /// for the whole dataset replaces one allocation per `StringRecord`.
     arena: Vec<u8>,
+    /// Interleaved `(begin, len)` arena offsets per field, in row order. Shared
+    /// by every [`Row`], which stores only where its own pair range starts —
+    /// see [`Row`]'s note on why flat beats a per-row vector.
+    bounds: Vec<u32>,
     /// 0-based index of the grouping column.
     index: usize,
     warned_missing_column: bool,
@@ -169,6 +202,7 @@ impl GroupedData {
             intern: BTreeMap::new(),
             names: Vec::new(),
             arena: Vec::new(),
+            bounds: Vec::new(),
             index: column_number.index(),
             warned_missing_column: false,
         }
@@ -187,6 +221,21 @@ impl GroupedData {
         id
     }
 
+    /// Pre-size the byte arena and the shared bound array for roughly `bytes`
+    /// of input, so neither grows by doubling into a large unused tail.
+    ///
+    /// Bounds are 8 bytes per field (`u32` begin + `u32` len) while a field's
+    /// payload averages longer than that, so allowing one bound slot per input
+    /// byte is generous and still far below the doubling slack it avoids.
+    ///
+    /// Only ever called with an upper bound derived from real input size; the
+    /// arena stays growable, so an under-estimate costs a reallocation and not
+    /// correctness.
+    fn reserve_bytes(&mut self, bytes: usize) {
+        self.arena.reserve(bytes);
+        self.bounds.reserve(bytes * 2);
+    }
+
     fn process<R: std::io::Read>(&mut self, rdr: &mut csv::Reader<R>) -> Result<()> {
         let mut record = csv::ByteRecord::new();
         while rdr.read_byte_record(&mut record)? {
@@ -201,11 +250,10 @@ impl GroupedData {
 
             let group_id = self.intern_key(key);
 
-            // Build the row from byte slices, appending field data into the
-            // arena. All fields (including the grouping column) are stored so
-            // that field indices remain stable for the skip logic in write_to.
-            let field_slices: Vec<&[u8]> = record.iter().collect();
-            let row = Row::from_byte_slices(&field_slices, &mut self.arena);
+            // Ingest straight from the ByteRecord. `ByteRecord::iter` yields
+            // `&[u8]` and is exact-size, so no intermediate collection is built
+            // — one per row would reintroduce the allocation this removes.
+            let row = Row::ingest(record.iter(), self.index, &mut self.arena, &mut self.bounds);
 
             self.groups.entry(group_id).or_default().push(row);
         }
@@ -267,6 +315,16 @@ impl GroupedData {
                 //
                 // `display()` because the name may not be UTF-8.
                 let file = File::open(filename).with_context(|| format!("cannot open '{}'", filename.display()))?;
+                // Reserve before reading. A `Vec<u8>` grown by doubling leaves up to
+                // half its capacity untouched but allocated, and on macOS that slack
+                // is resident: measured 118 MB of a 268 MB arena on the 1M-row
+                // fixture. The file's length bounds the retained payload — every
+                // stored field is a slice of it minus delimiters, headers and the
+                // grouping column — so sizing to it removes the overshoot without
+                // ever reallocating mid-read.
+                if let Ok(meta) = file.metadata() {
+                    groups.reserve_bytes(usize::try_from(meta.len()).unwrap_or(0));
+                }
                 let mut rdr = Self::build_reader(file, has_headers, delim);
                 groups.process(&mut rdr).with_context(|| format!("cannot read '{}'", filename.display()))?;
             }
@@ -309,7 +367,7 @@ impl GroupedData {
     /// Returns an I/O error if writing to `out` fails.
     pub fn write_rows(&self, rows: &[Row], out: &mut impl Write) -> io::Result<()> {
         for row in rows {
-            row.write_to(out, self.index, &self.arena)?;
+            row.write_to(out, self.index, &self.arena, &self.bounds)?;
         }
 
         Ok(())
@@ -493,12 +551,17 @@ mod tests {
         let (_, few_allocations) = count_allocations(|| parse(&few));
         let (_, many_allocations) = count_allocations(|| parse(&many));
 
+        // Was bounded at 3.5 per row when every record owned a `StringRecord`.
+        // Rows are now ranges into shared arrays, so the measured cost over the
+        // extra rows is a handful of allocations in total. This leaves room for
+        // allocator noise but fails immediately if a per-row allocation comes
+        // back — a bound that cannot fail proves nothing (issue #104 AC 4).
         let delta = many_allocations.saturating_sub(few_allocations);
         assert!(
-            delta <= STEP * 7 / 2,
+            delta <= STEP / 8,
             "parsing {STEP} extra rows into the same two groups cost {delta} allocations \
              ({FEW} rows: {few_allocations}, {MANY} rows: {many_allocations}); that exceeds the \
-             3.5-per-row budget, so something beyond the reader is allocating once per row"
+             0.125-per-row budget, so something beyond the arena append allocates per row"
         );
     }
 
@@ -577,6 +640,61 @@ mod tests {
         );
     }
 
+    /// The arena must not grow when the grouping column's values are unique.
+    ///
+    /// This is the RSS regression guard for issue #104. Storing the grouping
+    /// field per row costs one full key per record, and at high key
+    /// cardinality that exceeds the entire payload — measured as +23.8% peak
+    /// RSS on the 1M-row/1M-group fixture versus the `StringRecord` baseline,
+    /// which turned the memory fix into a memory regression exactly where it
+    /// mattered most. Skipping the grouping column makes retained row bytes
+    /// depend only on the printed payload.
+    ///
+    /// Both inputs carry the same payload bytes; only the grouping column
+    /// differs (two repeating keys vs one unique key per row), so an arena
+    /// that stored the key would show a large delta here.
+    #[test]
+    fn arena_bytes_do_not_include_the_grouping_column() {
+        const ROWS: usize = 500;
+        // A deliberately long key so the skipped bytes dominate if they leak.
+        let key = "x".repeat(64);
+
+        let low_card = {
+            let mut out = String::from("key,a,b\n");
+            for row in 0..ROWS {
+                use std::fmt::Write;
+                writeln!(out, "{key}{},r{row}c1,r{row}c2", row % 2).expect("writing to a String cannot fail");
+            }
+            out
+        };
+        let high_card = {
+            let mut out = String::from("key,a,b\n");
+            for row in 0..ROWS {
+                use std::fmt::Write;
+                writeln!(out, "{key}{row},r{row}c1,r{row}c2").expect("writing to a String cannot fail");
+            }
+            out
+        };
+
+        let low = parse(&low_card);
+        let high = parse(&high_card);
+
+        // The high-cardinality input carries ~ROWS extra distinct key bytes on
+        // disk. If those were copied into the arena the difference would be
+        // tens of kilobytes; it must instead be only the differing key suffixes
+        // that remain in the intern table, which is not part of the arena.
+        let delta = high.arena.len().abs_diff(low.arena.len());
+        assert!(
+            delta < ROWS, // at most one byte per row (the unique key suffix)
+            "arena grew {delta} bytes going from 2 groups to {ROWS} groups over the same \
+             payload; the grouping column must not be copied into the arena"
+        );
+        assert!(
+            !high.arena.windows(key.len()).any(|w| w == key.as_bytes()),
+            "a grouping-column value was found verbatim in the arena"
+        );
+    }
+
     /// Print the exact counts that the budget tests above only bound.
     ///
     /// Those bounds are deliberately loose so they cannot flake on allocator
@@ -648,6 +766,11 @@ mod tests {
 
     /// `Row::fields` must expose every field in column order so downstream
     /// callers can inspect the rows that [`GroupedData::groups`] returns.
+    ///
+    /// The grouping column is the one exception: its bytes are not retained
+    /// (they duplicate the interned key and dominate cost at high cardinality),
+    /// so it yields an empty string while every other field comes back intact
+    /// at its original index.
     #[test]
     fn row_fields_exposes_all_columns_in_order() {
         // Holds the measurement lock even though it asserts nothing about
@@ -660,7 +783,7 @@ mod tests {
         let groups = parse("key,a,b,c\nk,x,y,z\n");
         let (_, rows) = groups.groups().next().expect("one group");
         let row = &rows[0];
-        let fields: Vec<&str> = row.fields(&groups.arena).collect();
-        assert_eq!(fields, vec!["k", "x", "y", "z"]);
+        let fields: Vec<&str> = row.fields(&groups.arena, &groups.bounds).collect();
+        assert_eq!(fields, vec!["", "x", "y", "z"]);
     }
 }
