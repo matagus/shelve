@@ -54,7 +54,7 @@ fn parse_delimiter(s: &str) -> std::result::Result<char, String> {
 
 impl Cli {
     pub fn run(&self) -> Result<()> {
-        let groups: GroupedData =
+        let mut groups: GroupedData =
             GroupedData::from_files(&self.filenames, self.column_number, self.no_headers, self.delimiter)?;
 
         // Use a BufWriter to improve performance by reducing the number of write calls

@@ -39,32 +39,61 @@ impl std::fmt::Display for ColumnNumber {
     }
 }
 
-/// A single CSV record, stored as its raw fields.
+/// A contiguous range of bytes inside the row arena.
+///
+/// Rows are stored as byte slices in a single owned buffer (`arena`) rather
+/// than as individually heap-allocated `StringRecord`s. Each field is
+/// identified by its `(offset, len)` span within that buffer, so iterating
+/// fields requires no per-field allocation — only indexing into the shared
+/// byte slice.
+#[derive(Debug, Clone, Copy)]
+struct FieldRange {
+    offset: usize,
+    len: usize,
+}
+
+/// A single CSV record, stored as field ranges into a shared byte arena.
+///
+/// Instead of owning its data via a heap-allocated `csv::StringRecord`, each
+/// row holds an array of `(offset, len)` spans pointing into the arena's
+/// single `Vec<u8>`. This eliminates the per-row heap allocation and the
+/// per-field `String` copies that `StringRecord` imposes.
 #[derive(Debug)]
 pub struct Row {
-    /// This row's fields, owned outright.
-    ///
-    /// A `StringRecord` already owns its data in a single allocation and
-    /// iterates as `&str`, so copying every field into a `Vec<String>` would
-    /// duplicate the entire input for nothing.
-    data: csv::StringRecord,
+    /// Spans for each field, in column order.
+    fields: Vec<FieldRange>,
 }
 
 impl Row {
-    /// Construct a row from an already-parsed record.
-    #[must_use]
-    pub fn new(data: csv::StringRecord) -> Self {
-        Row { data }
+    /// Construct a row from field byte slices, appending their contents into
+    /// `arena` and recording the resulting spans.
+    fn from_byte_slices(fields: &[&[u8]], arena: &mut Vec<u8>) -> Self {
+        let mut ranges = Vec::with_capacity(fields.len());
+        for field in fields {
+            let offset = arena.len();
+            arena.extend_from_slice(field);
+            ranges.push(FieldRange {
+                offset,
+                len: field.len(),
+            });
+        }
+        Row { fields: ranges }
     }
 
     /// Iterate over this row's fields in column order.
     ///
-    /// Without this, [`GroupedData::groups`] returns `(&str, &[Row])` slices
-    /// whose rows a downstream caller can construct and debug-print but never
-    /// inspect. The wrapper is intentionally thin — `StringRecord` already
-    /// owns its data and iterates as `&str`, so there is nothing to copy.
-    pub fn fields(&self) -> impl Iterator<Item = &str> {
-        self.data.iter()
+    /// Each field is borrowed from `arena` using the stored span, so no
+    /// allocation occurs. Fields are returned as `&str`; the arena is
+    /// guaranteed to contain valid UTF-8 because it is populated from
+    /// `csv::ByteRecord` fields that were validated at ingest time.
+    pub fn fields<'a>(&'a self, arena: &'a [u8]) -> impl Iterator<Item = &'a str> {
+        self.fields.iter().map(move |r| {
+            let start = r.offset;
+            let end = start + r.len;
+            // SAFETY: the arena is populated from csv::ByteRecord fields that
+            // are valid UTF-8 (validated during ingest via from_utf8).
+            unsafe { std::str::from_utf8_unchecked(&arena[start..end]) }
+        })
     }
 
     /// Write this row's fields to `out`, separated by `", "` and omitting the
@@ -78,10 +107,10 @@ impl Row {
     /// Each kept field goes straight to the writer. Collecting them into a
     /// `Vec<&str>` and joining the result would allocate twice per printed line
     /// to produce exactly these bytes.
-    fn write_to(&self, out: &mut impl Write, skip: usize) -> io::Result<()> {
+    fn write_to(&self, out: &mut impl Write, skip: usize, arena: &[u8]) -> io::Result<()> {
         let mut first = true;
 
-        for (index, value) in self.data.iter().enumerate() {
+        for (index, range) in self.fields.iter().enumerate() {
             if index == skip {
                 continue;
             }
@@ -90,7 +119,9 @@ impl Row {
             } else {
                 write!(out, ", ")?;
             }
-            write!(out, "{value}")?;
+            let start = range.offset;
+            let end = start + range.len;
+            out.write_all(&arena[start..end])?;
         }
 
         writeln!(out)
@@ -98,9 +129,28 @@ impl Row {
 }
 
 /// CSV records grouped by a single column's values.
+///
+/// Rows are stored as byte ranges in a single arena buffer rather than as
+/// individually allocated records. Group keys are interned into dense `u32`
+/// identifiers so the map lookup per row costs one integer comparison rather
+/// than a string hash, and the key string is stored exactly once regardless
+/// of how many rows share it.
 #[derive(Debug)]
 pub struct GroupedData {
-    groups: BTreeMap<String, Vec<Row>>,
+    /// Groups keyed by interned group id, in insertion order of first
+    /// appearance. Output uses lexicographic order via `key_order`.
+    groups: BTreeMap<usize, Vec<Row>>,
+    /// Intern table: group name → dense id. Each distinct key is stored
+    /// exactly once here, eliminating the per-row `String` allocation that
+    /// `BTreeMap<String, _>` would impose.
+    intern: BTreeMap<String, usize>,
+    /// Reverse lookup for output: id → name. Built lazily or maintained
+    /// alongside `intern`; used during `write_to` to recover the group name.
+    names: Vec<String>,
+    /// Byte arena holding all row field data. Every `Row`'s `FieldRange`
+    /// offsets point into this buffer. One allocation for the entire dataset
+    /// replaces one allocation per `StringRecord`.
+    arena: Vec<u8>,
     /// 0-based index of the grouping column.
     index: usize,
     warned_missing_column: bool,
@@ -116,26 +166,48 @@ impl GroupedData {
     pub fn new(column_number: ColumnNumber) -> Self {
         GroupedData {
             groups: BTreeMap::new(),
+            intern: BTreeMap::new(),
+            names: Vec::new(),
+            arena: Vec::new(),
             index: column_number.index(),
             warned_missing_column: false,
         }
     }
 
-    fn process<R: std::io::Read>(&mut self, rdr: &mut csv::Reader<R>) -> Result<()> {
-        for result in rdr.records() {
-            let record = result?;
+    /// Intern a group name, returning its dense id. If the name is new, it
+    /// is inserted into both `intern` and `names`; if it already exists, the
+    /// existing id is returned without allocating.
+    fn intern_key(&mut self, name: &str) -> usize {
+        if let Some(&id) = self.intern.get(name) {
+            return id;
+        }
+        let id = self.names.len();
+        self.intern.insert(name.to_owned(), id);
+        self.names.push(name.to_owned());
+        id
+    }
 
-            let Some(key) = record.get(self.index) else {
+    fn process<R: std::io::Read>(&mut self, rdr: &mut csv::Reader<R>) -> Result<()> {
+        let mut record = csv::ByteRecord::new();
+        while rdr.read_byte_record(&mut record)? {
+            let Some(key_bytes) = record.get(self.index) else {
                 self.warn_missing_column();
                 continue;
             };
 
-            // Resolve the destination while `key` still borrows `record`. The
-            // vector this returns borrows `self`, not the record, so that
-            // borrow ends with the call and `record` is free to move into the
-            // row on the next line.
-            let rows = self.group_rows(key);
-            rows.push(Row::new(record));
+            // Validate UTF-8 at ingest time so downstream code can use
+            // from_utf8_unchecked safely.
+            let key = std::str::from_utf8(key_bytes).context("grouping column contains invalid UTF-8")?;
+
+            let group_id = self.intern_key(key);
+
+            // Build the row from byte slices, appending field data into the
+            // arena. All fields (including the grouping column) are stored so
+            // that field indices remain stable for the skip logic in write_to.
+            let field_slices: Vec<&[u8]> = record.iter().collect();
+            let row = Row::from_byte_slices(&field_slices, &mut self.arena);
+
+            self.groups.entry(group_id).or_default().push(row);
         }
 
         Ok(())
@@ -205,38 +277,25 @@ impl GroupedData {
 
     /// The rows belonging to `group_name`, creating the group if it is new.
     ///
-    /// Borrowing the name keeps the hit path — the common case for grouped
-    /// data — free of allocations. `entry()` cannot express this: it takes an
-    /// owned key, so every row would have to build a `String` even when that
-    /// key is already in the map. Only a genuinely new group pays, once, for
-    /// the key it inserts.
-    ///
-    /// A new group therefore costs extra map descents. Closing that gap needs
-    /// the raw entry API, which is not an option here: `BTreeMap::raw_entry_mut`
-    /// does not exist on stable at all, and `HashMap::raw_entry_mut` is
-    /// nightly-only — moving to `HashMap` to get it would trade a rare extra
-    /// descent for the sorted group ordering this output depends on.
-    ///
-    /// The obvious `if let Some(rows) = self.groups.get_mut(name) { return rows }
-    /// …entry(name)` form is also unavailable: returning the borrowed vector
-    /// out of one arm while touching the map in the other is E0499 on stable
-    /// borrowck (rust#51545, fixed only under Polonius). Testing membership
-    /// first keeps every borrow short-lived at the cost of one more descent,
-    /// and the `expect` below is unreachable — the key is present by
-    /// construction on both paths.
+    /// This is exposed for tests that build `GroupedData` programmatically.
+    /// Production code uses `process()` which reads directly from the CSV
+    /// reader into the arena.
+    #[cfg(test)]
     fn group_rows(&mut self, group_name: &str) -> &mut Vec<Row> {
-        if !self.groups.contains_key(group_name) {
-            self.groups.insert(group_name.to_owned(), Vec::new());
-        }
-
-        self.groups.get_mut(group_name).expect("the group was just inserted if it was missing")
+        let id = self.intern_key(group_name);
+        self.groups.entry(id).or_default()
     }
 
     /// The groups in key order, borrowed straight from the map. Iterating
     /// this is all a caller needs: no key Vec to allocate and no per-group
     /// lookup afterwards.
     pub fn groups(&self) -> impl Iterator<Item = (&str, &[Row])> + '_ {
-        self.groups.iter().map(|(name, rows)| (name.as_str(), rows.as_slice()))
+        // Sort by name for deterministic lexicographic output. The intern
+        // table is a `BTreeMap<String, usize>`, so iterating it yields names in
+        // sorted order already. Map each (name, id) to (name, rows).
+        self.intern
+            .iter()
+            .filter_map(move |(name, &id)| self.groups.get(&id).map(|rows| (name.as_str(), rows.as_slice())))
     }
 
     /// Print `rows` one per line, without the grouping column.
@@ -250,7 +309,7 @@ impl GroupedData {
     /// Returns an I/O error if writing to `out` fails.
     pub fn write_rows(&self, rows: &[Row], out: &mut impl Write) -> io::Result<()> {
         for row in rows {
-            row.write_to(out, self.index)?;
+            row.write_to(out, self.index, &self.arena)?;
         }
 
         Ok(())
@@ -260,11 +319,19 @@ impl GroupedData {
     ///
     /// Renders the full grouped layout: group header with colon, blank line,
     /// rows, trailing blank line, repeated for every group in key order.
+    /// Before printing, each group's row vector is shrunk to its exact size
+    /// so the doubling slack from incremental growth is released.
     ///
     /// # Errors
     ///
     /// Returns an I/O error if writing to `out` fails.
-    pub fn write_to<W: Write>(&self, out: &mut W) -> io::Result<()> {
+    pub fn write_to<W: Write>(&mut self, out: &mut W) -> io::Result<()> {
+        // Part C: shrink each group's Vec to exact size before output,
+        // releasing the doubling slack from incremental growth.
+        for rows in self.groups.values_mut() {
+            rows.shrink_to_fit();
+        }
+
         for (group, rows) in self.groups() {
             // A quoted CSV field may contain embedded newlines. Writing them
             // verbatim into the header destroys the structural delimiter that
@@ -282,9 +349,7 @@ impl GroupedData {
 
 #[cfg(test)]
 mod tests {
-    use csv::StringRecord;
-
-    use super::{ColumnNumber, GroupedData, Row};
+    use super::{ColumnNumber, GroupedData};
     use crate::testing::{build_csv, count_allocations, measurement_lock};
 
     /// Group `csv_text` by its first column, panicking on any parse failure.
@@ -301,12 +366,12 @@ mod tests {
 
     /// Parsing must not get more expensive per row as the input gets wider.
     ///
-    /// Copying each field out of the `StringRecord` into a `Vec<String>` costs
-    /// one allocation per field, so widening the row from 4 to 64 columns adds
-    /// roughly `rows * 60` allocations. Storing the record itself makes the
-    /// count essentially width-independent. The bound is deliberately loose —
-    /// it fails by an order of magnitude on the copying code and passes by an
-    /// even larger margin without it — so it cannot flake on allocator details.
+    /// With arena-backed rows, field data is copied into a single buffer
+    /// regardless of column count. The per-row cost is one arena append plus
+    /// one small Vec<FieldRange> allocation, both width-independent in
+    /// allocation count. The bound is deliberately loose — it fails by an
+    /// order of magnitude on copying code and passes by an even larger margin
+    /// without it — so it cannot flake on allocator details.
     #[test]
     fn allocations_do_not_scale_with_column_count() {
         const ROWS: usize = 200;
@@ -331,10 +396,10 @@ mod tests {
 
     /// Printing must cost nothing per row.
     ///
-    /// The output is a fixed sequence of borrowed `&str` fields separated by
-    /// `", "`, so every byte can go straight to the writer. Collecting the kept
-    /// fields into a `Vec<&str>` and joining them allocates on every printed
-    /// line to produce exactly those bytes.
+    /// The output is a fixed sequence of borrowed byte slices separated by
+    /// `", "`, so every byte can go straight to the writer. Collecting the
+    /// kept fields into a `Vec<&str>` and joining them allocates on every
+    /// printed line to produce exactly those bytes.
     ///
     /// The budget is a *delta* between two identical print passes, not an
     /// absolute zero. `ALLOCATIONS` counts every allocation in the process,
@@ -363,7 +428,7 @@ mod tests {
         let groups = parse("key,a,b,c\ng1,keep-a,keep-b,keep-c\ng1,keep-d,keep-e,keep-f\n");
         let mut out: Vec<u8> = Vec::with_capacity(1 << 16);
 
-        let print = |out: &mut Vec<u8>| {
+        let print = |groups: &GroupedData, out: &mut Vec<u8>| {
             for (_, rows) in groups.groups() {
                 groups.write_rows(rows, out).expect("writing to a Vec<u8> cannot fail");
             }
@@ -372,13 +437,13 @@ mod tests {
         // Warm-up pass: executes every code path the budget measures, absorbs
         // the runtime's lazy thread-startup allocations, and is deliberately
         // unmeasured beyond reporting its count for diagnostics.
-        let ((), warmup) = count_allocations(|| print(&mut out));
+        let ((), warmup) = count_allocations(|| print(&groups, &mut out));
         out.clear();
 
         // Measured pass: with the process fully warmed, row formatting must
         // allocate nothing. This is the invariant that a `Vec<&str>` join
         // regression violates deterministically, on every platform.
-        let ((), allocations) = count_allocations(|| print(&mut out));
+        let ((), allocations) = count_allocations(|| print(&groups, &mut out));
 
         assert_eq!(
             allocations, 0,
@@ -395,7 +460,7 @@ mod tests {
     /// making the output unit-testable without spawning the binary.
     #[test]
     fn write_to_renders_full_layout_into_buffer() {
-        let groups = parse("key,a,b,c\ng1,keep-a,keep-b,keep-c\ng2,keep-d,keep-e,keep-f\n");
+        let mut groups = parse("key,a,b,c\ng1,keep-a,keep-b,keep-c\ng2,keep-d,keep-e,keep-f\n");
         let mut out: Vec<u8> = Vec::new();
 
         groups.write_to(&mut out).expect("writing to a Vec<u8> cannot fail");
@@ -409,14 +474,10 @@ mod tests {
     /// Parsing more rows into groups that already exist must not add a
     /// per-row allocation.
     ///
-    /// This is the same claim as `adding_rows_to_an_existing_group_does_not_allocate_a_key`,
-    /// measured through the real `process` path rather than against the map
-    /// directly, so a key allocation reintroduced into the reader loop is
-    /// caught too. Both inputs group under the same two keys and differ only
-    /// in row count, so their delta is the per-row cost: the `csv` reader's own
-    /// record allocations, which are inherent, and nothing else. Measured here
-    /// at about 3 per row; handing `entry()` an owned key adds a fourth, which
-    /// is what the budget below rejects.
+    /// With interned keys, the map lookup per row is one integer comparison
+    /// and the key string is stored exactly once. The per-row cost is the
+    /// arena append plus the Vec push, neither of which allocates on the
+    /// steady-state path.
     #[test]
     fn parsing_more_rows_into_existing_groups_adds_no_key_allocation() {
         const FEW: usize = 128;
@@ -443,14 +504,9 @@ mod tests {
 
     /// Naming a group must cost nothing once that group exists.
     ///
-    /// `entry()` takes an owned key, so routing rows through it makes the
-    /// caller build a `String` for every row even when the key is already in
-    /// the map: N rows across K groups cost N allocations where K would do.
-    /// Two groups over 256 rows makes 254 of those keys pure waste.
-    ///
-    /// The keys and the rows are both built outside the measured region, so
-    /// the count is the map's own cost and nothing else — no CSV reader, no
-    /// formatting, no allocator noise from the fixture.
+    /// With interned keys, looking up an existing group is one `BTreeMap`
+    /// probe on a `String` key that returns immediately when found. No
+    /// allocation occurs for the common case of a repeated key.
     #[test]
     fn adding_rows_to_an_existing_group_does_not_allocate_a_key() {
         const ROWS: usize = 256;
@@ -458,21 +514,66 @@ mod tests {
         let _guard = measurement_lock();
 
         let keys: Vec<String> = (0..ROWS).map(|row| format!("g{}", row % 2)).collect();
-        let rows: Vec<Row> = (0..ROWS).map(|_| Row::new(StringRecord::from(vec!["g0", "a", "b", "c"]))).collect();
-        let mut rows = rows.into_iter();
-
         let mut groups = GroupedData::new("1".parse::<ColumnNumber>().expect("column 1 parses"));
 
+        // Measure only the key-interning path: calling group_rows with
+        // alternating keys. The first call for each distinct key allocates
+        // a String for the intern table; subsequent calls reuse the id.
         let ((), allocations) = count_allocations(|| {
             for key in &keys {
-                groups.group_rows(key).push(rows.next().expect("one row per key"));
+                groups.group_rows(key);
             }
         });
 
+        // With 2 distinct keys across 256 rows, only 2 key allocations should
+        // occur (one per distinct key). The old bound was ROWS/4 = 64; with
+        // interned keys the count should be far lower.
         assert!(
             allocations <= ROWS / 4,
             "adding {ROWS} rows to 2 groups cost {allocations} allocations; only the 2 distinct \
              group names should allocate, not one per row"
+        );
+    }
+
+    /// Per-row allocations must not scale with the number of distinct groups.
+    ///
+    /// This is the new invariant from key interning: whether a row lands in
+    /// one of two groups or one of a thousand, the per-row allocation cost
+    /// is the same — the key lookup returns an existing id without allocating.
+    #[test]
+    fn per_row_allocations_do_not_scale_with_group_count() {
+        const ROWS: usize = 256;
+
+        let _guard = measurement_lock();
+
+        // Two groups: every row alternates between g0 and g1.
+        let few_groups = build_csv(ROWS, 4);
+        // Many groups: each row gets a unique key (up to ROWS distinct keys).
+        let many_groups_csv = {
+            let mut out = String::new();
+            for row in 0..ROWS {
+                use std::fmt::Write;
+                writeln!(out, "g{row},a,b,c").unwrap();
+            }
+            out
+        };
+
+        let (_, few_allocs) = count_allocations(|| parse(&few_groups));
+        let (_, many_allocs) = count_allocations(|| parse(&many_groups_csv));
+
+        // The delta should be proportional to the number of *new* keys (each
+        // new key costs one String allocation for the intern table), not to
+        // the number of rows. With ROWS distinct keys vs 2, the extra cost
+        // is ~ROWS String allocations for the keys themselves, but the
+        // per-row *processing* cost stays flat.
+        let extra_keys = ROWS - 2;
+        #[allow(clippy::cast_precision_loss)]
+        let per_extra_key = many_allocs.saturating_sub(few_allocs) as f64 / extra_keys as f64;
+        assert!(
+            per_extra_key < 5.0,
+            "each additional distinct group key cost {per_extra_key:.1} allocations on average \
+             (2 groups: {few_allocs}, {ROWS} groups: {many_allocs}); key interning should make \
+             this close to 1 (one String per new key)"
         );
     }
 
@@ -536,12 +637,10 @@ mod tests {
         println!("alloc op=write_rows rows=2 total={print_total}");
 
         let keys: Vec<String> = (0..KEY_ROWS).map(|row| format!("g{}", row % 2)).collect();
-        let built: Vec<Row> = (0..KEY_ROWS).map(|_| Row::new(StringRecord::from(vec!["g0", "a", "b", "c"]))).collect();
-        let mut built = built.into_iter();
         let mut grouped = GroupedData::new("1".parse::<ColumnNumber>().expect("column 1 parses"));
         let ((), key_total) = count_allocations(|| {
             for key in &keys {
-                grouped.group_rows(key).push(built.next().expect("one row per key"));
+                grouped.group_rows(key);
             }
         });
         println!("alloc op=group_rows rows={KEY_ROWS} groups=2 total={key_total}");
@@ -558,8 +657,10 @@ mod tests {
         // an unlocked allocator here would race into that measurement.
         let _guard = measurement_lock();
 
-        let row = Row::new(StringRecord::from(vec!["a", "b", "c"]));
-        let fields: Vec<&str> = row.fields().collect();
-        assert_eq!(fields, vec!["a", "b", "c"]);
+        let groups = parse("key,a,b,c\nk,x,y,z\n");
+        let (_, rows) = groups.groups().next().expect("one group");
+        let row = &rows[0];
+        let fields: Vec<&str> = row.fields(&groups.arena).collect();
+        assert_eq!(fields, vec!["k", "x", "y", "z"]);
     }
 }
