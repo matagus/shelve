@@ -11,6 +11,29 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Supply-chain checks parse Cargo.lock against the RustSec advisory DB, so
+  # their result is byte-identical on every OS. Running them once (instead of
+  # three times in the matrix below) saves ~2 jobs' worth of Actions minutes
+  # per run with no loss of coverage. cargo-audit is the second, independent
+  # resolver over the same DB (belt-and-suspenders; see issue #96).
+  supply-chain:
+    name: Supply-chain check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@cargo-deny
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      - name: cargo deny check
+        run: cargo deny check
+
+      - name: cargo audit
+        run: cargo audit
+
   # Same matrix as the `verify` job in release.yml. CI has to cover every
   # supported platform up front: a Windows-only failure that only surfaces at
   # tag time blocks `cargo publish`, because release gates on that job.
@@ -27,23 +50,6 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-
-      # Lint before building: both gates are cheap to satisfy and should fail the
-      # run fast, instead of surfacing only after the whole test suite.
-      - name: Install cargo-deny
-        uses: taiki-e/install-action@cargo-deny
-
-      - name: Supply-chain check (cargo-deny)
-        run: cargo deny check
-
-      # Belt-and-suspenders: cargo-audit uses the same RustSec advisory DB
-      # but a different resolver, so it can catch issues cargo-deny misses.
-      # See https://github.com/matagus/shelve/issues/96.
-      - name: Install cargo-audit
-        uses: taiki-e/install-action@cargo-audit
-
-      - name: Supply-chain check (cargo-audit)
-        run: cargo audit
 
       - name: Check formatting
         run: cargo fmt --all --check
