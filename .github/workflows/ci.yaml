@@ -33,8 +33,17 @@ jobs:
       - name: Install cargo-deny
         uses: taiki-e/install-action@cargo-deny
 
-      - name: Supply-chain check
+      - name: Supply-chain check (cargo-deny)
         run: cargo deny check
+
+      # Belt-and-suspenders: cargo-audit uses the same RustSec advisory DB
+      # but a different resolver, so it can catch issues cargo-deny misses.
+      # See https://github.com/matagus/shelve/issues/96.
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      - name: Supply-chain check (cargo-audit)
+        run: cargo audit
 
       - name: Check formatting
         run: cargo fmt --all --check
