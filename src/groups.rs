@@ -80,9 +80,12 @@ impl Row {
         arena: &mut Vec<u8>,
         bounds: &mut Vec<u32>,
     ) -> Self {
-        // One amortised reservation per row instead of one per field push: a
-        // `Vec` grown by 2N pushes still reallocates O(log) times, and each
-        // reallocation copies the whole array.
+        // One reservation per row sized to its field count, so the pair pushes
+        // below never grow the array mid-record. Amortisation, not elimination:
+        // a `Vec` grown by 2N pushes still reallocates O(log) times, and each
+        // reallocation copies the whole array. Reserving once when the input
+        // size is known (`reserve_bytes`) would be cheaper, but stdin has no
+        // size to reserve against and this path must stay correct for it.
         bounds.reserve(fields.len() * 2);
         let start = u32::try_from(bounds.len()).expect("a record's range offsets fit in u32");
         let count = u32::try_from(fields.len()).expect("a record's field count fits in u32");
@@ -386,6 +389,15 @@ impl GroupedData {
     /// Before printing, each group's row vector is shrunk to its exact size
     /// so the doubling slack from incremental growth is released.
     ///
+    /// Takes `&mut self` *because* of that shrink: peak RSS is only reduced once
+    /// the slack is actually dropped, which requires mutable access. The
+    /// consequence is that printing mutates the model, and the operation is no
+    /// longer cost-stable across calls — the first call does O(groups) capacity
+    /// work and the rest find every vector already exact, so a second `write_to`
+    /// is cheaper than the first rather than identical. Output bytes are the same
+    /// either way. Only the per-group row vectors are touched here; `arena` and
+    /// `bounds` keep their reserved capacity.
+    ///
     /// # Errors
     ///
     /// Returns an I/O error if writing to `out` fails.
@@ -430,12 +442,17 @@ mod tests {
 
     /// Parsing must not get more expensive per row as the input gets wider.
     ///
-    /// With arena-backed rows, field data is copied into a single buffer
-    /// regardless of column count. The per-row cost is one arena append plus
-    /// one small Vec<FieldRange> allocation, both width-independent in
-    /// allocation count. The bound is deliberately loose — it fails by an
-    /// order of magnitude on copying code and passes by an even larger margin
-    /// without it — so it cannot flake on allocator details.
+    /// With arena-backed rows, widening a record from 4 to 64 columns adds no
+    /// allocation at all: the field bytes are appended into the shared `arena`
+    /// and their spans into the shared `bounds` array, so extra columns cost
+    /// extra *bytes* in buffers that already exist, not extra allocations per
+    /// field. (The v1 design gave each row its own `Vec<FieldRange>`; that was
+    /// one allocation per row regardless of width, and it is what made peak RSS
+    /// regress — see [`Row`]'s note on why flat beats a per-row vector.)
+    ///
+    /// The bound is deliberately loose — it fails by an order of magnitude on
+    /// copying code and passes by an even larger margin without it — so it
+    /// cannot flake on allocator details.
     #[test]
     fn allocations_do_not_scale_with_column_count() {
         const ROWS: usize = 200;
@@ -571,18 +588,24 @@ mod tests {
         );
     }
 
-    /// Naming a group must cost nothing once that group exists.
+    /// Interning a repeated group name must not allocate once per lookup.
     ///
-    /// With interned keys, looking up an existing group is one `BTreeMap`
-    /// probe on a `String` key that returns immediately when found. No
-    /// allocation occurs for the common case of a repeated key.
+    /// This measures `group_rows` alone, which resolves a name through the
+    /// intern table and returns the group's row vector. It deliberately does
+    /// **not** push anything: with rows now being 8-byte `Copy` descriptors
+    /// rather than owned records, a push would allocate nothing and could not
+    /// distinguish an interning regression from a row-storage one. The steady
+    /// state where a repeated key costs no allocation at all — including the
+    /// push path — is guarded end to end by
+    /// [`parsing_more_rows_into_existing_groups_adds_no_key_allocation`], which
+    /// parses real CSV rather than driving the map directly.
     #[test]
-    fn adding_rows_to_an_existing_group_does_not_allocate_a_key() {
-        const ROWS: usize = 256;
+    fn interning_a_repeated_group_name_does_not_allocate_per_lookup() {
+        const LOOKUPS: usize = 256;
 
         let _guard = measurement_lock();
 
-        let keys: Vec<String> = (0..ROWS).map(|row| format!("g{}", row % 2)).collect();
+        let keys: Vec<String> = (0..LOOKUPS).map(|row| format!("g{}", row % 2)).collect();
         let mut groups = GroupedData::new("1".parse::<ColumnNumber>().expect("column 1 parses"));
 
         // Measure only the key-interning path: calling group_rows with
@@ -594,13 +617,13 @@ mod tests {
             }
         });
 
-        // With 2 distinct keys across 256 rows, only 2 key allocations should
+        // With 2 distinct keys across 256 lookups, only 2 key allocations should
         // occur (one per distinct key). The old bound was ROWS/4 = 64; with
         // interned keys the count should be far lower.
         assert!(
-            allocations <= ROWS / 4,
-            "adding {ROWS} rows to 2 groups cost {allocations} allocations; only the 2 distinct \
-             group names should allocate, not one per row"
+            allocations <= LOOKUPS / 4,
+            "interning {LOOKUPS} repeated group names across 2 groups cost {allocations} \
+             allocations; only the 2 distinct group names should allocate, not one per lookup"
         );
     }
 
@@ -767,7 +790,7 @@ mod tests {
                 grouped.group_rows(key);
             }
         });
-        println!("alloc op=group_rows rows={KEY_ROWS} groups=2 total={key_total}");
+        println!("alloc op=intern_lookups rows={KEY_ROWS} groups=2 total={key_total}");
     }
 
     /// `Row::fields` must expose every field in column order so downstream
