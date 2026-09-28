@@ -42,7 +42,7 @@ impl std::fmt::Display for ColumnNumber {
 /// A single CSV record: where its field ranges live in the shared arrays.
 ///
 /// Instead of owning its data via a heap-allocated `csv::StringRecord`, a row
-/// is a small descriptor into three collection-wide arrays (`arena` for the
+/// is a small descriptor into two collection-wide arrays (`arena` for the
 /// field bytes, `bounds` for the boundaries). This removes the per-record
 /// allocation entirely.
 ///
@@ -92,6 +92,9 @@ impl Row {
                 arena.extend_from_slice(field);
             }
             bounds.push(u32::try_from(begin).expect("arena offset fits in u32"));
+            // `arena.len() - begin` is 0 for the skipped grouping column, which
+            // is what keeps its slot without copying its bytes — see the note on
+            // [`Row`] about why the slot exists at all.
             bounds.push(u32::try_from(arena.len() - begin).expect("one field's bytes fit in u32"));
         }
         Row { start, len: count }
@@ -167,16 +170,16 @@ impl Row {
 /// of how many rows share it.
 #[derive(Debug)]
 pub struct GroupedData {
-    /// Groups keyed by interned group id, in insertion order of first
-    /// appearance. Output uses lexicographic order via `key_order`.
+    /// Groups keyed by interned group id. Iteration order here is insertion
+    /// order and is never observable: output order comes from [`Self::intern`],
+    /// which is sorted by name.
     groups: BTreeMap<usize, Vec<Row>>,
     /// Intern table: group name → dense id. Each distinct key is stored
     /// exactly once here, eliminating the per-row `String` allocation that
-    /// `BTreeMap<String, _>` would impose.
+    /// `BTreeMap<String, _>` would impose. Because it is a `BTreeMap` keyed by
+    /// name, iterating it yields groups in lexicographic order, which *is* the
+    /// output order — no reverse id → name table and no sort at print time.
     intern: BTreeMap<String, usize>,
-    /// Reverse lookup for output: id → name. Built lazily or maintained
-    /// alongside `intern`; used during `write_to` to recover the group name.
-    names: Vec<String>,
     /// Byte arena holding every retained field of every row. One allocation
     /// for the whole dataset replaces one allocation per `StringRecord`.
     arena: Vec<u8>,
@@ -200,7 +203,6 @@ impl GroupedData {
         GroupedData {
             groups: BTreeMap::new(),
             intern: BTreeMap::new(),
-            names: Vec::new(),
             arena: Vec::new(),
             bounds: Vec::new(),
             index: column_number.index(),
@@ -208,16 +210,19 @@ impl GroupedData {
         }
     }
 
-    /// Intern a group name, returning its dense id. If the name is new, it
-    /// is inserted into both `intern` and `names`; if it already exists, the
-    /// existing id is returned without allocating.
+    /// Intern a group name, returning its dense id. If the name is new, one
+    /// owned `String` is inserted; if it already exists, the existing id is
+    /// returned without allocating.
+    ///
+    /// The id is the count of keys interned so far, which is dense because
+    /// every insert takes the next unused one. `intern.len()` is that count, so
+    /// no separate counter — and no second copy of the key — is needed.
     fn intern_key(&mut self, name: &str) -> usize {
         if let Some(&id) = self.intern.get(name) {
             return id;
         }
-        let id = self.names.len();
+        let id = self.intern.len();
         self.intern.insert(name.to_owned(), id);
-        self.names.push(name.to_owned());
         id
     }
 
@@ -348,9 +353,10 @@ impl GroupedData {
     /// this is all a caller needs: no key Vec to allocate and no per-group
     /// lookup afterwards.
     pub fn groups(&self) -> impl Iterator<Item = (&str, &[Row])> + '_ {
-        // Sort by name for deterministic lexicographic output. The intern
-        // table is a `BTreeMap<String, usize>`, so iterating it yields names in
-        // sorted order already. Map each (name, id) to (name, rows).
+        // No sort and no reverse table: the intern table is a
+        // `BTreeMap<String, usize>`, so iterating it already yields names in
+        // lexicographic order — the output order. The `get` only recovers the
+        // rows for that name's id.
         self.intern
             .iter()
             .filter_map(move |(name, &id)| self.groups.get(&id).map(|rows| (name.as_str(), rows.as_slice())))
@@ -785,5 +791,65 @@ mod tests {
         let row = &rows[0];
         let fields: Vec<&str> = row.fields(&groups.arena, &groups.bounds).collect();
         assert_eq!(fields, vec!["", "x", "y", "z"]);
+    }
+
+    /// The zero-length slot for the grouping column must survive as a *slot*.
+    ///
+    /// [`Row::ingest`] skips the grouping column's bytes but still pushes a
+    /// `(begin, 0)` pair for it. That pair is what keeps every later field at its
+    /// original column index; if someone "optimises" the skip into not pushing
+    /// the pair at all, the bounds array no longer lines up with `len` fields per
+    /// row and each row silently loses its last field — while the arena size stays
+    /// identical, so `arena_bytes_do_not_include_the_grouping_column` cannot see it.
+    /// This asserts the two things that change together: one pair per field, and a
+    /// zero-length range exactly at the grouping index.
+    #[test]
+    fn skipped_grouping_column_keeps_a_zero_length_bound_pair() {
+        const COLUMNS: usize = 4;
+        const ROWS: usize = 2;
+
+        // Same reason as `row_fields_exposes_all_columns_in_order`: collecting
+        // field vectors allocates, and `ALLOCATIONS` is a process-wide counter,
+        // so an unlocked allocating test races into whatever budget happens to be
+        // measuring and breaks *that* test, not this one.
+        let _guard = measurement_lock();
+
+        let groups = parse("key,a,b,c\ng1,keep-a,keep-b,keep-c\ng2,keep-d,keep-e,keep-f\n");
+
+        // One (begin, len) pair per field of every retained row. Derived from
+        // the fixture rather than hardcoded, so a change in what `parse` keeps
+        // fails with a count instead of a mystery.
+        assert_eq!(
+            groups.bounds.len(),
+            ROWS * COLUMNS * 2,
+            "bounds must hold one pair per field even for the skipped column"
+        );
+
+        let kept: Vec<Vec<&str>> = groups
+            .groups()
+            .flat_map(|(_, rows)| rows)
+            .map(|row| row.fields(&groups.arena, &groups.bounds).collect())
+            .collect();
+        assert_eq!(
+            kept,
+            vec![
+                vec!["", "keep-a", "keep-b", "keep-c"],
+                vec!["", "keep-d", "keep-e", "keep-f"]
+            ],
+            "every non-key field must keep its original column index"
+        );
+
+        // The grouping column's pair is (begin, 0): an empty span inside the
+        // arena, not a missing entry.
+        let skip = groups.index;
+        for row in groups.groups().flat_map(|(_, rows)| rows) {
+            let at = row.start as usize + skip * 2;
+            let begin = usize::try_from(groups.bounds[at]).expect("bound fits in usize");
+            assert_eq!(groups.bounds[at + 1], 0, "the skipped field must record a zero length");
+            assert!(
+                begin <= groups.arena.len(),
+                "a zero-length span must still sit in the arena"
+            );
+        }
     }
 }
